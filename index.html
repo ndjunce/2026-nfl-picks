@@ -171,6 +171,16 @@ function teamChip(abbr, cls){
     + `<span class="logo-fb ${cls||''}" style="display:none">${A}</span></span>`;
 }
 
+// ---- Central Time formatting (convert the feed's UTC kickoff to America/Chicago) ----
+function fmtCT(iso){
+  if(!iso) return "";
+  const d = new Date(iso); if(isNaN(d)) return "";
+  try{
+    return new Intl.DateTimeFormat("en-US",{ timeZone:"America/Chicago",
+      weekday:"short", hour:"numeric", minute:"2-digit" }).format(d) + " CT";
+  }catch(e){ return ""; }
+}
+
 // ---- player photos (committed under /players/<name>.jpg; falls back to initials circle) ----
 function photoUrl(name){ return `players/${String(name).toLowerCase()}.jpg`; }
 // Photos may be .jpg OR .png. Try .jpg first; on error retry .png once; then show initials.
@@ -211,6 +221,7 @@ function indexGames(data){
     const s1 = parseInt(t1.score||0,10), s2 = parseInt(t2.score||0,10);
     m[mkey(a1,a2)] = {
       state: st.state||"pre", completed: !!st.completed, detail: st.shortDetail||"",
+      date: ev.date || (c && c.date) || null,
       winner, total: s1+s2,
       scores: { [a1.toUpperCase()]: s1, [a2.toUpperCase()]: s2 }
     };
@@ -327,7 +338,8 @@ function render(data){
       return `<span class="${cls}">${teamChip(t, cls)}</span>`;
     };
     const stCls = info.state==="post"?"s-post":(info.state==="in"?"s-in":"s-pre");
-    const stTxt = info.state==="post"?"FINAL":(info.state==="in"?"LIVE":"—");
+    const kickCT = fmtCT(info.date);
+    const stTxt = info.state==="post"?"FINAL":(info.state==="in"?"LIVE":(kickCT||"—"));
     const sc = (info.scores&&Object.keys(info.scores).length)
       ? `<span class="score">${A} ${info.scores[A]||0} – ${B} ${info.scores[B]||0}</span>` : "";
     const pks = PICKS.players.map(p=>{

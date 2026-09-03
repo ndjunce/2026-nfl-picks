@@ -146,6 +146,9 @@ function logoUrl(a){ return `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboar
 function logoImg(a){ const A=String(a).toUpperCase();
   return `<img class="logo" src="${logoUrl(A)}" alt="${A}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';"><span class="logo-fb" style="display:none">${A}</span>`; }
 function photoUrl(n){ return `players/${String(n).toLowerCase()}.jpg`; }
+// Central Time kickoff (from the feed's UTC date)
+function fmtCT(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return "";
+  try{ return new Intl.DateTimeFormat("en-US",{timeZone:"America/Chicago",weekday:"short",hour:"numeric",minute:"2-digit"}).format(d)+" CT"; }catch(e){ return ""; } }
 function photoImgErr(img){
   if(img.dataset.tried!=="png"){ img.dataset.tried="png"; img.src=img.src.replace(/\.jpg(\?.*)?$/i,".png"); return; }
   img.style.display="none"; if(img.nextElementSibling) img.nextElementSibling.style.display="inline-flex";
@@ -196,7 +199,8 @@ function renderGrid(){
       const btn=(t)=>`<button class="tb ${sel===t?'sel':''}" onclick="pick(${i},'${p}','${t}')" title="${t}">${logoImg(t)}</button>`;
       return `<td class="pcell ${sel?'set':''}"><span class="teambtns">${btn(g.team1)}${btn(g.team2)}</span></td>`;
     }).join("");
-    return `<tr><td class="game"><span class="teambtns">${logoImg(g.team1)} <span class="muted">vs</span> ${logoImg(g.team2)}</span></td>${cells}</tr>`;
+    const kick = fmtCT(g.date);
+    return `<tr><td class="game"><span class="teambtns">${logoImg(g.team1)} <span class="muted">vs</span> ${logoImg(g.team2)}</span>${kick?`<div class="muted" style="font-size:11px;margin-top:3px">${kick}</div>`:""}</td>${cells}</tr>`;
   }).join("");
   updateProgress();
 }

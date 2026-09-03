@@ -44,6 +44,15 @@
   .grid-wrap{overflow-x:auto}
   .note{color:var(--mut);font-size:11.5px;text-align:center;margin-top:8px;line-height:1.5}
   .err{background:rgba(255,96,96,.12);border:1px solid var(--red);padding:10px;border-radius:9px;font-size:13px}
+  .badge{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;margin-left:5px;vertical-align:middle}
+  .b-out{background:rgba(255,207,63,.16);color:var(--gold);border:1px solid var(--gold)}
+  .b-tb{background:rgba(74,168,255,.16);color:var(--blu);border:1px solid var(--blu)}
+  .wk-list{display:flex;flex-direction:column;gap:8px}
+  .wk{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;
+      background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:13.5px}
+  .wk .lab{color:var(--mut);font-weight:800}
+  .wk .win{font-weight:800}
+  .streak{color:var(--grn);font-weight:800}
   @media (min-width:820px){
     .wrap{max-width:1080px;padding:22px}
     h1{font-size:26px}
@@ -69,14 +78,29 @@
 
 <div class="wrap">
   <div id="errbox"></div>
+
   <div class="card">
     <h2>🏆 Season Standings</h2>
     <div class="grid-wrap"><table id="standings"><thead></thead><tbody></tbody></table></div>
+    <div class="note">Weeks won = outright + via tiebreaker. Ranked by weeks won, then total correct picks.</div>
   </div>
+
   <div class="card">
-    <h2>Weekly records</h2>
+    <h2>📈 Pool Stats</h2>
+    <div class="grid-wrap"><table id="pool"><thead></thead><tbody></tbody></table></div>
+    <div class="note">Best week = most correct in a single week · Streak = consecutive weeks won (outright or TB) · Avg = correct picks per graded week.</div>
+  </div>
+
+  <div class="card">
+    <h2>🗓️ Week-by-Week Winners</h2>
+    <div id="weekwinners" class="wk-list"></div>
+  </div>
+
+  <div class="card">
+    <h2>Weekly correct-pick records</h2>
     <div class="grid-wrap"><table id="weekly"><thead></thead><tbody></tbody></table></div>
   </div>
+
   <div class="note" id="foot"></div>
 </div>
 
@@ -87,14 +111,16 @@ const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scorebo
 const PLAYERS = (window.SEASON && SEASON.players) || (window.PICKS && PICKS.players) || ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
 function mkey(a,b){ return [a.toUpperCase(),b.toUpperCase()].sort().join("|"); }
 function photoUrl(n){ return `players/${String(n).toLowerCase()}.jpg`; }
+// Photos may be .jpg OR .png. Try .jpg, on error retry .png once, then show initials.
 function photoImgErr(img){
   if(img.dataset.tried!=="png"){ img.dataset.tried="png"; img.src=img.src.replace(/\.jpg(\?.*)?$/i,".png"); return; }
   img.style.display="none"; if(img.nextElementSibling) img.nextElementSibling.style.display="inline-flex";
 }
 function avatar(n){ const i=String(n||"?").slice(0,1).toUpperCase();
   return `<img class="avatar" src="${photoUrl(n)}" alt="${n}" onerror="photoImgErr(this)"><span class="avatar-fb" style="display:none">${i}</span>`; }
+function pct(w,l){ const g=w+l; return g? Math.round(100*w/g) : 0; }
 
-// Grade the CURRENT week live from picks.js + ESPN (so standings include the in-progress week).
+// Grade the CURRENT week live from picks.js + ESPN (results + tiebreaker actual total).
 async function currentWeekResult(){
   if(!window.PICKS || !PICKS.games) return null;
   let gmap={};
@@ -104,8 +130,9 @@ async function currentWeekResult(){
       (d.events||[]).forEach(ev=>{const c=ev.competitions&&ev.competitions[0];if(!c)return;
         const t1=c.competitors[0],t2=c.competitors[1];if(!t1||!t2)return;
         const st=c.status&&c.status.type?c.status.type:{}; let w=null;
+        const s1=parseInt(t1.score||0,10), s2=parseInt(t2.score||0,10);
         if(st.completed) w=(t1.winner?t1.team.abbreviation:(t2.winner?t2.team.abbreviation:null));
-        gmap[mkey(t1.team.abbreviation,t2.team.abbreviation)]={completed:!!st.completed,winner:w};});
+        gmap[mkey(t1.team.abbreviation,t2.team.abbreviation)]={completed:!!st.completed,winner:w,total:s1+s2};});
     }
   }catch(e){}
   const results={}; PLAYERS.forEach(p=>results[p]={w:0,l:0});
@@ -117,62 +144,127 @@ async function currentWeekResult(){
         if(pk===info.winner.toUpperCase()) results[p].w++; else results[p].l++; });
     }
   });
-  return anyFinal ? { week: PICKS.week, results, live:true } : { week: PICKS.week, results, live:true, noneFinal:true };
+  // tiebreaker: actual last-game total (if that game is final) + each player's predicted total
+  let tbActual=null;
+  if(PICKS.tiebreakerGame){ const tbi=gmap[mkey(PICKS.tiebreakerGame.team1,PICKS.tiebreakerGame.team2)];
+    if(tbi&&tbi.completed) tbActual=tbi.total; }
+  return { week: PICKS.week, results, tiebreaker: PICKS.tiebreaker||{}, tbActual,
+           live:true, noneFinal: !anyFinal };
 }
 
-function pct(w,l){ const g=w+l; return g? Math.round(100*w/g) : 0; }
+// Decide a week's winner: most correct = outright; tie -> tiebreaker (closest to actual); else TIED.
+function decideWeek(wk){
+  const graded = PLAYERS.some(p=>wk.results&&wk.results[p]&&(wk.results[p].w+wk.results[p].l)>0);
+  if(!graded) return { winners:[], type:"none", topW:0 };
+  const topW = Math.max(...PLAYERS.map(p=>(wk.results[p]||{w:0}).w));
+  const top = PLAYERS.filter(p=>(wk.results[p]||{w:0}).w===topW);
+  if(top.length===1) return { winners:top, type:"outright", topW };
+  // tie -> tiebreaker
+  const tb=wk.tiebreaker||{}, act=wk.tbActual;
+  if(act!=null){
+    const withTb = top.filter(p=>tb[p]!=null && tb[p]!=="");
+    if(withTb.length){
+      let best=null, bestDiff=Infinity;
+      withTb.forEach(p=>{ const diff=Math.abs(Number(tb[p])-act); if(diff<bestDiff){bestDiff=diff;best=p;} });
+      const tiedTb = withTb.filter(p=>Math.abs(Number(tb[p])-act)===bestDiff);
+      if(tiedTb.length===1) return { winners:tiedTb, type:"tiebreaker", topW, tbActual:act, tbDiff:bestDiff };
+      return { winners:tiedTb, type:"tied", topW, tbActual:act }; // even the TB tied
+    }
+  }
+  return { winners:top, type:"tied", topW }; // no TB data -> shown as tied
+}
 
 (async function(){
-  // Collect completed weeks from the archive, plus the live current week (if not already archived).
   const weeks = (window.SEASON && SEASON.weeks) ? SEASON.weeks.slice() : [];
   const cur = await currentWeekResult();
   if(cur && !weeks.some(w=>w.week===cur.week)) weeks.push(cur);
+  weeks.sort((a,b)=>a.week-b.week);
+  const weekNums=weeks.map(w=>w.week);
 
-  // aggregate
-  const tot={}; PLAYERS.forEach(p=>tot[p]={w:0,l:0,byWeek:{}});
+  // per-player aggregates
+  const tot={}; PLAYERS.forEach(p=>tot[p]={w:0,l:0,byWeek:{},outright:0,tbWins:0,tbShots:0,weeksWon:0,bestWk:null});
   weeks.forEach(wk=>{
     PLAYERS.forEach(p=>{
       const r=(wk.results&&wk.results[p])||{w:0,l:0};
       tot[p].w+=r.w; tot[p].l+=r.l; tot[p].byWeek[wk.week]={w:r.w,l:r.l};
+      if((r.w+r.l)>0 && (tot[p].bestWk===null || r.w>tot[p].bestWk.w)) tot[p].bestWk={w:r.w,l:r.l,week:wk.week};
     });
   });
-  const weekNums=weeks.map(w=>w.week).sort((a,b)=>a-b);
 
-  // best/worst week by wins (only weeks that had finals)
-  function bestWorst(p){
-    const entries=Object.entries(tot[p].byWeek).filter(([wk,r])=>(r.w+r.l)>0);
-    if(!entries.length) return {best:null,worst:null};
-    const byWins=entries.slice().sort((a,b)=> b[1].w-a[1].w);
-    return { best:byWins[0], worst:byWins[byWins.length-1] };
-  }
+  // decide each week + attribute wins; track streaks
+  const decisions={};
+  weeks.forEach(wk=>{
+    const dec=decideWeek(wk); decisions[wk.week]=dec;
+    if(dec.type==="outright") dec.winners.forEach(p=>{tot[p].outright++; tot[p].weeksWon++;});
+    else if(dec.type==="tiebreaker"){ dec.winners.forEach(p=>{tot[p].tbWins++; tot[p].weeksWon++;}); }
+    // count tiebreaker "shots": weeks where a player was in the tie that went to TB
+    if(dec.type==="tiebreaker"||dec.type==="tied"){
+      const topW=dec.topW; PLAYERS.forEach(p=>{ if((wk.results[p]||{w:-1}).w===topW) tot[p].tbShots++; });
+    }
+  });
+  // current win streak: consecutive most-recent graded weeks won (outright or TB)
+  const gradedWeeks=weeks.filter(wk=>decisions[wk.week].type!=="none").map(wk=>wk.week);
+  function streak(p){ let s=0; for(let i=gradedWeeks.length-1;i>=0;i--){ const dec=decisions[gradedWeeks[i]];
+      if(dec.winners.includes(p)) s++; else break; } return s; }
+  function avgCorrect(p){ const gs=Object.values(tot[p].byWeek).filter(r=>(r.w+r.l)>0);
+      if(!gs.length) return null; return (gs.reduce((a,r)=>a+r.w,0)/gs.length); }
 
-  // standings sorted by total wins, then win%
-  const rows=PLAYERS.map(p=>({p, w:tot[p].w, l:tot[p].l, pct:pct(tot[p].w,tot[p].l), bw:bestWorst(p)}));
-  rows.sort((a,b)=> b.w-a.w || b.pct-a.pct);
-  const topW = rows.length?rows[0].w:0;
-
+  // ---- Standings table (ranked by weeks won, then total correct) ----
+  const rows=PLAYERS.map(p=>({p, ...tot[p], pctv:pct(tot[p].w,tot[p].l)}));
+  rows.sort((a,b)=> b.weeksWon-a.weeksWon || b.w-a.w || b.pctv-a.pctv);
+  const topWon=rows.length?rows[0].weeksWon:0;
+  const anyGraded = gradedWeeks.length>0;
   const sTh=document.querySelector("#standings thead"), sTb=document.querySelector("#standings tbody");
-  sTh.innerHTML=`<tr><th class="rk">#</th><th class="player">Player</th><th>Total W</th><th>Record</th><th>Win %</th><th>Best wk</th><th>Worst wk</th></tr>`;
+  sTh.innerHTML=`<tr><th class="rk">#</th><th class="player">Player</th><th>Weeks Won</th><th>Outright</th><th>Via TB</th><th>Total Correct</th><th>Win %</th></tr>`;
   sTb.innerHTML=rows.map((r,i)=>{
-    const lead=r.w===topW&&topW>0;
-    const bw=r.bw;
-    const bestTxt=bw.best?`<span class="best">${bw.best[1].w}-${bw.best[1].l}</span> <span class="muted">(wk ${bw.best[0]})</span>`:"—";
-    const worstTxt=bw.worst?`<span class="worst">${bw.worst[1].w}-${bw.worst[1].l}</span> <span class="muted">(wk ${bw.worst[0]})</span>`:"—";
+    const lead=anyGraded && r.weeksWon===topWon && topWon>0;
     return `<tr class="${lead?'lead':''}">
       <td class="rk">${i+1}</td>
       <td class="player"><span class="pcell">${avatar(r.p)}<span class="nm">${lead?'👑 ':''}${r.p}</span></span></td>
-      <td class="big">${r.w}</td>
-      <td>${(r.w+r.l)>0?`${r.w}-${r.l}`:'—'}</td>
-      <td class="pct">${(r.w+r.l)>0?r.pct+'%':'—'}</td>
-      <td>${bestTxt}</td>
-      <td>${worstTxt}</td>
+      <td class="big">${r.weeksWon}</td>
+      <td>${r.outright}</td>
+      <td>${r.tbWins}</td>
+      <td>${r.w}</td>
+      <td class="pct">${(r.w+r.l)>0?r.pctv+'%':'—'}</td>
     </tr>`;
   }).join("");
 
-  // weekly grid: players x weeks
+  // ---- Pool stats table ----
+  const pTh=document.querySelector("#pool thead"), pTb=document.querySelector("#pool tbody");
+  pTh.innerHTML=`<tr><th class="player">Player</th><th>Best Week</th><th>Avg Correct</th><th>Win Streak</th><th>TBs Won</th></tr>`;
+  pTb.innerHTML=PLAYERS.map(p=>{
+    const bw=tot[p].bestWk, av=avgCorrect(p), sk=streak(p);
+    return `<tr>
+      <td class="player"><span class="pcell">${avatar(p)}<span class="nm">${p}</span></span></td>
+      <td>${bw?`<span class="best">${bw.w}-${bw.l}</span> <span class="muted">(wk ${bw.week})</span>`:'—'}</td>
+      <td>${av!=null?av.toFixed(1):'—'}</td>
+      <td>${sk>0?`<span class="streak">${sk}🔥</span>`:'—'}</td>
+      <td>${tot[p].tbWins}</td>
+    </tr>`;
+  }).join("");
+
+  // ---- Week-by-week winners ----
+  const ww=document.getElementById("weekwinners");
+  if(!anyGraded){
+    ww.innerHTML=`<div class="muted">No completed weeks yet — winners show here as weeks finish.</div>`;
+  } else {
+    ww.innerHTML=weeks.filter(wk=>decisions[wk.week].type!=="none").map(wk=>{
+      const dec=decisions[wk.week];
+      const names=dec.winners.join(" & ");
+      let badge="", detail="";
+      if(dec.type==="outright"){ badge=`<span class="badge b-out">OUTRIGHT</span>`; detail=`${dec.topW} correct`; }
+      else if(dec.type==="tiebreaker"){ badge=`<span class="badge b-tb">TIEBREAKER</span>`;
+        detail=`tied at ${dec.topW} · TB total ${dec.tbActual} (off by ${dec.tbDiff})`; }
+      else { badge=`<span class="badge b-tb">TIED</span>`; detail=`${dec.topW} correct each${dec.tbActual!=null?` · TB ${dec.tbActual}`:``}`; }
+      return `<div class="wk"><span class="lab">Week ${wk.week}</span>
+        <span class="win">${names} ${badge} <span class="muted" style="font-weight:400">${detail}</span></span></div>`;
+    }).reverse().join("");
+  }
+
+  // ---- Weekly correct-pick grid ----
   const wTh=document.querySelector("#weekly thead"), wTb=document.querySelector("#weekly tbody");
   if(!weekNums.length){
-    wTh.innerHTML=""; wTb.innerHTML=`<tr><td class="muted" style="padding:14px">No completed weeks yet — records appear here as games finish.</td></tr>`;
+    wTh.innerHTML=""; wTb.innerHTML=`<tr><td class="muted" style="padding:14px">No weeks yet.</td></tr>`;
   } else {
     wTh.innerHTML=`<tr><th class="player">Player</th>${weekNums.map(w=>`<th>Wk ${w}</th>`).join("")}</tr>`;
     wTb.innerHTML=PLAYERS.map(p=>{
@@ -182,10 +274,10 @@ function pct(w,l){ const g=w+l; return g? Math.round(100*w/g) : 0; }
   }
 
   document.getElementById("subhead").textContent =
-    `${weekNums.length} week${weekNums.length===1?"":"s"} counted${cur&&cur.noneFinal?` · Week ${cur.week} in progress`:""}`;
+    `${gradedWeeks.length} week${gradedWeeks.length===1?"":"s"} counted${cur&&cur.noneFinal?` · Week ${cur.week} in progress`:""}`;
   document.getElementById("foot").innerHTML =
     `Standings accumulate as weeks finish. The current week updates live from ESPN; past weeks come from <code>season.js</code>. `+
-    `Archive a week in <code>season.js</code> once it's final so it's locked in.`;
+    `Add a week's <code>tiebreaker</code> + <code>tbActual</code> in <code>season.js</code> so tied weeks can be awarded via tiebreaker.`;
 })();
 </script>
 </body>
