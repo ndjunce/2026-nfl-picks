@@ -37,10 +37,10 @@
   .tb img{width:20px;height:20px;object-fit:contain}
   .logo{width:22px;height:22px;object-fit:contain;vertical-align:middle}
   .logo-fb{font-weight:800}
-  .phdr{display:flex;flex-direction:column;align-items:center;gap:3px}
-  .pavatar{width:30px;height:30px;border-radius:50%;object-fit:cover;background:#0d131c;border:1px solid var(--line)}
-  .pavatar-fb{width:30px;height:30px;border-radius:50%;background:var(--card2);border:1px solid var(--line);
-             display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:var(--blu)}
+  .phdr{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:13px;font-weight:700}
+  .pavatar{width:50px;height:50px;border-radius:50%;object-fit:cover;background:#0d131c;border:1px solid var(--line)}
+  .pavatar-fb{width:50px;height:50px;border-radius:50%;background:var(--card2);border:1px solid var(--line);
+             display:inline-flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;color:var(--blu)}
   .tball{font-size:12px;font-weight:700;color:var(--mut)}
   .pcell{padding:4px}
   .pcell.set{background:rgba(51,224,138,.07)}
@@ -56,12 +56,35 @@
   .ok{color:var(--grn)} .muted{color:var(--mut)}
   .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
   .err{background:rgba(255,96,96,.12);border:1px solid var(--red);padding:10px;border-radius:9px;font-size:13px}
+  /* nav tabs (shared across pages) */
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+  .tabs a{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:999px;
+          font-size:13.5px;font-weight:800;text-decoration:none;color:var(--mut);
+          background:#0d131c;border:1px solid var(--line);transition:.12s}
+  .tabs a:hover{color:var(--ink);border-color:var(--blu)}
+  .tabs a.active{color:#04121f;background:var(--blu);border-color:var(--blu)}
+  .tabs a.soon{opacity:.5;pointer-events:none}
+  /* desktop: larger click targets + wider logos in the grid */
+  @media (min-width:820px){
+    .tb{font-size:14px;padding:7px 12px;min-width:56px}
+    .tb img{width:26px;height:26px}
+    .logo{width:28px;height:28px}
+    th,td{padding:11px 9px}
+    .pavatar,.pavatar-fb{width:58px;height:58px}
+    .tbinput{width:80px;padding:11px}
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>Picks Entry <span class="adminflag">ADMIN — only publishes if YOU push</span></h1>
   <div class="sub">Click winners + type tiebreakers → generate <code>picks.js</code> → commit &amp; push. Friends can't publish; only your git push changes the live site.</div>
+  <nav class="tabs">
+    <a href="index.html">🏈 Picks</a>
+    <a href="stats.html">📊 Stats</a>
+    <a href="admin.html" class="active">✏️ Admin</a>
+    <a href="#" class="soon">＋ More</a>
+  </nav>
 </header>
 
 <div class="wrap">
@@ -123,8 +146,12 @@ function logoUrl(a){ return `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboar
 function logoImg(a){ const A=String(a).toUpperCase();
   return `<img class="logo" src="${logoUrl(A)}" alt="${A}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';"><span class="logo-fb" style="display:none">${A}</span>`; }
 function photoUrl(n){ return `players/${String(n).toLowerCase()}.jpg`; }
+function photoImgErr(img){
+  if(img.dataset.tried!=="png"){ img.dataset.tried="png"; img.src=img.src.replace(/\.jpg(\?.*)?$/i,".png"); return; }
+  img.style.display="none"; if(img.nextElementSibling) img.nextElementSibling.style.display="inline-flex";
+}
 function playerHdr(n){ const i=String(n).slice(0,1).toUpperCase();
-  return `<div class="phdr"><img class="pavatar" src="${photoUrl(n)}" alt="${n}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex';"><span class="pavatar-fb" style="display:none">${i}</span><span>${n}</span></div>`; }
+  return `<div class="phdr"><img class="pavatar" src="${photoUrl(n)}" alt="${n}" onerror="photoImgErr(this)"><span class="pavatar-fb" style="display:none">${i}</span><span>${n}</span></div>`; }
 let GAMES = [];          // [{team1,team2,date}]
 let state = { picks:{}, tiebreaker:{} };  // picks[gameIdx][player]=abbr ; tiebreaker[player]=num
 let tiebreakerGame = null;
