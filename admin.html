@@ -32,8 +32,15 @@
   th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);font-weight:800}
   th.game,td.game{text-align:left}
   .teambtns{display:inline-flex;gap:4px}
-  .tb{font-size:13px;font-weight:800;padding:5px 10px;border-radius:8px;background:#0d131c;border:1px solid var(--line);color:var(--ink);cursor:pointer;min-width:44px}
+  .tb{font-size:12px;font-weight:800;padding:4px 8px;border-radius:8px;background:#0d131c;border:1px solid var(--line);color:var(--ink);cursor:pointer;min-width:44px;display:inline-flex;align-items:center;gap:4px}
   .tb.sel{background:var(--grn);border-color:var(--grn);color:#05210f}
+  .tb img{width:20px;height:20px;object-fit:contain}
+  .logo{width:22px;height:22px;object-fit:contain;vertical-align:middle}
+  .logo-fb{font-weight:800}
+  .phdr{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .pavatar{width:30px;height:30px;border-radius:50%;object-fit:cover;background:#0d131c;border:1px solid var(--line)}
+  .pavatar-fb{width:30px;height:30px;border-radius:50%;background:var(--card2);border:1px solid var(--line);
+             display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:var(--blu)}
   .tball{font-size:12px;font-weight:700;color:var(--mut)}
   .pcell{padding:4px}
   .pcell.set{background:rgba(51,224,138,.07)}
@@ -110,6 +117,14 @@
 <script>
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 const PLAYERS = ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
+
+// team logo (ESPN CDN) with abbr fallback; player photo (/players/<name>.jpg) with initials fallback
+function logoUrl(a){ return `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/${String(a).toLowerCase()}.png`; }
+function logoImg(a){ const A=String(a).toUpperCase();
+  return `<img class="logo" src="${logoUrl(A)}" alt="${A}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';"><span class="logo-fb" style="display:none">${A}</span>`; }
+function photoUrl(n){ return `players/${String(n).toLowerCase()}.jpg`; }
+function playerHdr(n){ const i=String(n).slice(0,1).toUpperCase();
+  return `<div class="phdr"><img class="pavatar" src="${photoUrl(n)}" alt="${n}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex';"><span class="pavatar-fb" style="display:none">${i}</span><span>${n}</span></div>`; }
 let GAMES = [];          // [{team1,team2,date}]
 let state = { picks:{}, tiebreaker:{} };  // picks[gameIdx][player]=abbr ; tiebreaker[player]=num
 let tiebreakerGame = null;
@@ -147,14 +162,14 @@ async function loadGames(){
 
 function renderGrid(){
   const thead=document.querySelector("#grid thead"), tbody=document.querySelector("#grid tbody");
-  thead.innerHTML = `<tr><th class="game">Game</th>${PLAYERS.map(p=>`<th>${p}</th>`).join("")}</tr>`;
+  thead.innerHTML = `<tr><th class="game">Game</th>${PLAYERS.map(p=>`<th>${playerHdr(p)}</th>`).join("")}</tr>`;
   tbody.innerHTML = GAMES.map((g,i)=>{
     const cells = PLAYERS.map(p=>{
       const sel=(state.picks[i]&&state.picks[i][p])||"";
-      const btn=(t)=>`<button class="tb ${sel===t?'sel':''}" onclick="pick(${i},'${p}','${t}')">${t}</button>`;
+      const btn=(t)=>`<button class="tb ${sel===t?'sel':''}" onclick="pick(${i},'${p}','${t}')" title="${t}">${logoImg(t)}</button>`;
       return `<td class="pcell ${sel?'set':''}"><span class="teambtns">${btn(g.team1)}${btn(g.team2)}</span></td>`;
     }).join("");
-    return `<tr><td class="game"><b>${g.team1}</b> <span class="muted">vs</span> <b>${g.team2}</b></td>${cells}</tr>`;
+    return `<tr><td class="game"><span class="teambtns">${logoImg(g.team1)} <span class="muted">vs</span> ${logoImg(g.team2)}</span></td>${cells}</tr>`;
   }).join("");
   updateProgress();
 }
