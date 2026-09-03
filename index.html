@@ -66,12 +66,27 @@
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);margin-right:5px;vertical-align:middle}
   .err{background:rgba(255,96,96,.12);border:1px solid var(--red);color:var(--ink);padding:12px;border-radius:10px;font-size:13px}
   .note{color:var(--mut);font-size:11px;text-align:center;margin-top:8px}
+  .muted{color:var(--mut)}
+  .nav{margin-top:8px;font-size:13px}
+  .nav a{color:var(--blu);text-decoration:none;font-weight:700}
+  .nav a.active{color:var(--ink)}
+  /* deciding games */
+  .dg{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;
+      background:var(--bg);border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+  .dg.split{border-color:var(--yel)}
+  .dg.consensus{opacity:.6}
+  .dg .mu{display:flex;align-items:center;gap:6px;font-weight:800;font-size:14px}
+  .dg .tag{font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .dg .tag.split{background:rgba(255,210,63,.16);color:var(--yel);border:1px solid var(--yel)}
+  .dg .tag.consensus{background:#0d131c;color:var(--mut);border:1px solid var(--line)}
+  .dg .split-detail{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
 <header>
   <h1>🏈 NFL Picks Tracker</h1>
   <div class="sub" id="subhead">Loading…</div>
+  <div class="nav"><a href="index.html" class="active">This Week</a> · <a href="stats.html">Season Standings →</a></div>
 </header>
 
 <div class="wrap">
@@ -84,6 +99,12 @@
   </div>
 
   <div class="refresh" id="refresh"></div>
+
+  <div class="card">
+    <h2>🔀 Deciding Games <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— where the group is split</span></h2>
+    <p class="note" style="text-align:left;margin:0 0 10px">Split games decide the standings; consensus games (everyone agrees) won't move the leaderboard.</p>
+    <div id="deciding"></div>
+  </div>
 
   <div class="card">
     <h2>Games &amp; Picks</h2>
@@ -102,8 +123,14 @@ const POLL_MS = 30000;
 // Normalize a matchup to an unordered key so pick order (team1/team2) doesn't matter.
 function mkey(a, b){ return [a.toUpperCase(), b.toUpperCase()].sort().join("|"); }
 
-// ---- team logos (ESPN CDN, stable pattern by abbreviation) ----
-function logoUrl(abbr){ return `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/${String(abbr).toLowerCase()}.png`; }
+// ---- team logos ----
+// Prefer the feed's authoritative competitor.team.logo (filled by indexGames); fall back to
+// ESPN's stable CDN-by-abbreviation pattern so logos still show BEFORE the first fetch returns.
+const LOGOS = {};
+function logoUrl(abbr){
+  const A = String(abbr).toUpperCase();
+  return LOGOS[A] || `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/${A.toLowerCase()}.png`;
+}
 // <img> logo with the abbreviation kept as a small fallback label if the image fails.
 function teamChip(abbr, cls){
   const A = String(abbr||"").toUpperCase();
@@ -141,6 +168,9 @@ function indexGames(data){
     const comp = c.competitors||[];
     const t1 = comp[0], t2 = comp[1]; if(!t1||!t2) return;
     const a1 = t1.team.abbreviation, a2 = t2.team.abbreviation;
+    // record the feed's authoritative logo URL per team (competitor.team.logo)
+    if(t1.team.logo) LOGOS[a1.toUpperCase()] = t1.team.logo;
+    if(t2.team.logo) LOGOS[a2.toUpperCase()] = t2.team.logo;
     const st = c.status && c.status.type ? c.status.type : {};
     let winner = null;
     if(st.completed){ winner = (t1.winner? a1 : (t2.winner? a2 : null)); }
@@ -152,6 +182,38 @@ function indexGames(data){
     };
   });
   return m;
+}
+
+// Flag which games the group is SPLIT on (differentiators) vs consensus (won't move standings).
+function renderDeciding(gamesOut){
+  const el = document.getElementById("deciding"); if(!el) return;
+  const rows = gamesOut.map(({g,info})=>{
+    const counts = {};
+    PICKS.players.forEach(p=>{ const pk=(g.picks[p]||"").toUpperCase(); if(pk) counts[pk]=(counts[pk]||0)+1; });
+    const picked = Object.values(counts).reduce((a,b)=>a+b,0);
+    const distinct = Object.keys(counts).length;
+    // disagreement score = how far from unanimous (minority size). 0 = consensus.
+    const maxSide = picked ? Math.max(...Object.values(counts)) : 0;
+    const minority = picked - maxSide;
+    const split = distinct > 1;
+    const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
+    const a=counts[A]||0, b=counts[B]||0;
+    return {g,info,split,minority,A,B,a,b,picked};
+  });
+  // show split games first, most-contested first; then consensus
+  rows.sort((x,y)=> (y.split-x.split) || (y.minority-x.minority));
+  const anyPicks = rows.some(r=>r.picked>0);
+  if(!anyPicks){ el.innerHTML = `<div class="note" style="text-align:left">No picks entered yet — split/consensus shows once picks are in.</div>`; return; }
+  el.innerHTML = rows.map(r=>{
+    const cls = r.split ? "split" : "consensus";
+    const win = r.info.winner ? r.info.winner.toUpperCase() : null;
+    const tag = r.split ? `<span class="tag split">SPLIT ${r.a}–${r.b}</span>` : `<span class="tag consensus">CONSENSUS</span>`;
+    const detail = r.split ? `<span class="split-detail">${r.A} ${r.a} · ${r.B} ${r.b}${win?` · won: ${win}`:""}</span>` : ``;
+    return `<div class="dg ${cls}">
+      <span class="mu">${teamChip(r.A)} <span class="muted" style="font-weight:400">vs</span> ${teamChip(r.B)}</span>
+      <span style="display:flex;align-items:center;gap:8px">${detail}${tag}</span>
+    </div>`;
+  }).join("");
 }
 
 function render(data){
@@ -217,6 +279,9 @@ function render(data){
     tb.innerHTML = `<b>Tiebreaker</b> (${tbg} total, resolves when that game ends): `+
       PICKS.players.map(p=>`${p} ${PICKS.tiebreaker?PICKS.tiebreaker[p]:'?'}`).join(" · ");
   }
+
+  // ---- deciding games (disagreement finder) ----
+  renderDeciding(gamesOut);
 
   // ---- games list ----
   const gel = document.getElementById("games");

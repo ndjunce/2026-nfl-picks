@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Season Standings — NFL Picks</title>
+<style>
+  :root{--bg:#0b0f16;--card:#161d2a;--card2:#1d2636;--ink:#f2f6fb;--mut:#8f9cb0;
+        --line:#28313f;--grn:#33e08a;--red:#ff6060;--yel:#ffd23f;--blu:#4aa8ff;--gold:#ffcf3f;}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+  header{padding:16px;text-align:center;background:linear-gradient(180deg,#121a26,#0c1119);
+         border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+  h1{font-size:20px;margin:0;font-weight:800}
+  .sub{color:var(--mut);font-size:12.5px;margin-top:3px}
+  .nav{margin-top:8px;font-size:13px}
+  .nav a{color:var(--blu);text-decoration:none;font-weight:700}
+  .nav a.active{color:var(--ink)}
+  .wrap{max-width:820px;margin:0 auto;padding:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:0 0 12px;font-weight:800}
+  .muted{color:var(--mut)}
+  .avatar{width:34px;height:34px;border-radius:50%;object-fit:cover;background:#0d131c;border:1px solid var(--line)}
+  .avatar-fb{width:34px;height:34px;border-radius:50%;background:var(--card2);border:1px solid var(--line);
+             display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:var(--blu)}
+
+  table{border-collapse:collapse;width:100%}
+  th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);font-weight:800}
+  td.player,th.player{text-align:left}
+  .pcell{display:flex;align-items:center;gap:9px}
+  .pcell .nm{font-weight:800;font-size:15px}
+  tr.lead td{background:rgba(255,207,63,.07)}
+  .rk{color:var(--mut);font-weight:800}
+  .big{font-size:19px;font-weight:800}
+  .pct{color:var(--mut)}
+  .best{color:var(--grn);font-weight:700} .worst{color:var(--red);font-weight:700}
+  .grid-wrap{overflow-x:auto}
+  .note{color:var(--mut);font-size:11.5px;text-align:center;margin-top:8px;line-height:1.5}
+  .err{background:rgba(255,96,96,.12);border:1px solid var(--red);padding:10px;border-radius:9px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 Season Standings</h1>
+  <div class="sub" id="subhead">Loading…</div>
+  <div class="nav"><a href="index.html">← This Week</a> · <a href="stats.html" class="active">Season Standings</a></div>
+</header>
+
+<div class="wrap">
+  <div id="errbox"></div>
+  <div class="card">
+    <h2>🏆 Season Standings</h2>
+    <div class="grid-wrap"><table id="standings"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <div class="card">
+    <h2>Weekly records</h2>
+    <div class="grid-wrap"><table id="weekly"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <div class="note" id="foot"></div>
+</div>
+
+<script src="picks.js"></script>
+<script src="season.js"></script>
+<script>
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const PLAYERS = (window.SEASON && SEASON.players) || (window.PICKS && PICKS.players) || ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
+function mkey(a,b){ return [a.toUpperCase(),b.toUpperCase()].sort().join("|"); }
+function photoUrl(n){ return `players/${String(n).toLowerCase()}.jpg`; }
+function avatar(n){ const i=String(n||"?").slice(0,1).toUpperCase();
+  return `<img class="avatar" src="${photoUrl(n)}" alt="${n}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex';"><span class="avatar-fb" style="display:none">${i}</span>`; }
+
+// Grade the CURRENT week live from picks.js + ESPN (so standings include the in-progress week).
+async function currentWeekResult(){
+  if(!window.PICKS || !PICKS.games) return null;
+  let gmap={};
+  try{
+    const res=await fetch(`${ESPN}?week=${PICKS.week}&seasontype=2&dates=${PICKS.season}`,{cache:"no-store"});
+    if(res.ok){ const d=await res.json();
+      (d.events||[]).forEach(ev=>{const c=ev.competitions&&ev.competitions[0];if(!c)return;
+        const t1=c.competitors[0],t2=c.competitors[1];if(!t1||!t2)return;
+        const st=c.status&&c.status.type?c.status.type:{}; let w=null;
+        if(st.completed) w=(t1.winner?t1.team.abbreviation:(t2.winner?t2.team.abbreviation:null));
+        gmap[mkey(t1.team.abbreviation,t2.team.abbreviation)]={completed:!!st.completed,winner:w};});
+    }
+  }catch(e){}
+  const results={}; PLAYERS.forEach(p=>results[p]={w:0,l:0});
+  let anyFinal=false;
+  PICKS.games.forEach(g=>{
+    const info=gmap[mkey(g.team1,g.team2)];
+    if(info&&info.completed&&info.winner){ anyFinal=true;
+      PLAYERS.forEach(p=>{ const pk=(g.picks[p]||"").toUpperCase(); if(!pk)return;
+        if(pk===info.winner.toUpperCase()) results[p].w++; else results[p].l++; });
+    }
+  });
+  return anyFinal ? { week: PICKS.week, results, live:true } : { week: PICKS.week, results, live:true, noneFinal:true };
+}
+
+function pct(w,l){ const g=w+l; return g? Math.round(100*w/g) : 0; }
+
+(async function(){
+  // Collect completed weeks from the archive, plus the live current week (if not already archived).
+  const weeks = (window.SEASON && SEASON.weeks) ? SEASON.weeks.slice() : [];
+  const cur = await currentWeekResult();
+  if(cur && !weeks.some(w=>w.week===cur.week)) weeks.push(cur);
+
+  // aggregate
+  const tot={}; PLAYERS.forEach(p=>tot[p]={w:0,l:0,byWeek:{}});
+  weeks.forEach(wk=>{
+    PLAYERS.forEach(p=>{
+      const r=(wk.results&&wk.results[p])||{w:0,l:0};
+      tot[p].w+=r.w; tot[p].l+=r.l; tot[p].byWeek[wk.week]={w:r.w,l:r.l};
+    });
+  });
+  const weekNums=weeks.map(w=>w.week).sort((a,b)=>a-b);
+
+  // best/worst week by wins (only weeks that had finals)
+  function bestWorst(p){
+    const entries=Object.entries(tot[p].byWeek).filter(([wk,r])=>(r.w+r.l)>0);
+    if(!entries.length) return {best:null,worst:null};
+    const byWins=entries.slice().sort((a,b)=> b[1].w-a[1].w);
+    return { best:byWins[0], worst:byWins[byWins.length-1] };
+  }
+
+  // standings sorted by total wins, then win%
+  const rows=PLAYERS.map(p=>({p, w:tot[p].w, l:tot[p].l, pct:pct(tot[p].w,tot[p].l), bw:bestWorst(p)}));
+  rows.sort((a,b)=> b.w-a.w || b.pct-a.pct);
+  const topW = rows.length?rows[0].w:0;
+
+  const sTh=document.querySelector("#standings thead"), sTb=document.querySelector("#standings tbody");
+  sTh.innerHTML=`<tr><th class="rk">#</th><th class="player">Player</th><th>Total W</th><th>Record</th><th>Win %</th><th>Best wk</th><th>Worst wk</th></tr>`;
+  sTb.innerHTML=rows.map((r,i)=>{
+    const lead=r.w===topW&&topW>0;
+    const bw=r.bw;
+    const bestTxt=bw.best?`<span class="best">${bw.best[1].w}-${bw.best[1].l}</span> <span class="muted">(wk ${bw.best[0]})</span>`:"—";
+    const worstTxt=bw.worst?`<span class="worst">${bw.worst[1].w}-${bw.worst[1].l}</span> <span class="muted">(wk ${bw.worst[0]})</span>`:"—";
+    return `<tr class="${lead?'lead':''}">
+      <td class="rk">${i+1}</td>
+      <td class="player"><span class="pcell">${avatar(r.p)}<span class="nm">${lead?'👑 ':''}${r.p}</span></span></td>
+      <td class="big">${r.w}</td>
+      <td>${(r.w+r.l)>0?`${r.w}-${r.l}`:'—'}</td>
+      <td class="pct">${(r.w+r.l)>0?r.pct+'%':'—'}</td>
+      <td>${bestTxt}</td>
+      <td>${worstTxt}</td>
+    </tr>`;
+  }).join("");
+
+  // weekly grid: players x weeks
+  const wTh=document.querySelector("#weekly thead"), wTb=document.querySelector("#weekly tbody");
+  if(!weekNums.length){
+    wTh.innerHTML=""; wTb.innerHTML=`<tr><td class="muted" style="padding:14px">No completed weeks yet — records appear here as games finish.</td></tr>`;
+  } else {
+    wTh.innerHTML=`<tr><th class="player">Player</th>${weekNums.map(w=>`<th>Wk ${w}</th>`).join("")}</tr>`;
+    wTb.innerHTML=PLAYERS.map(p=>{
+      const cells=weekNums.map(w=>{const r=tot[p].byWeek[w]; return `<td>${r&&(r.w+r.l)>0?`${r.w}-${r.l}`:'—'}</td>`;}).join("");
+      return `<tr><td class="player"><span class="pcell">${avatar(p)}<span class="nm">${p}</span></span></td>${cells}</tr>`;
+    }).join("");
+  }
+
+  document.getElementById("subhead").textContent =
+    `${weekNums.length} week${weekNums.length===1?"":"s"} counted${cur&&cur.noneFinal?` · Week ${cur.week} in progress`:""}`;
+  document.getElementById("foot").innerHTML =
+    `Standings accumulate as weeks finish. The current week updates live from ESPN; past weeks come from <code>season.js</code>. `+
+    `Archive a week in <code>season.js</code> once it's final so it's locked in.`;
+})();
+</script>
+</body>
+</html>
