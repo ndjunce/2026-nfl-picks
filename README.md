@@ -1,8 +1,8 @@
-# NFL Picks Tracker
+# Phipps Tavern Speciality Picks 2026
 
 A **static** website (instant load, no server, no cold-start) that shows the group's weekly
 NFL picks + a live leaderboard. Friends open the link on their phones — no login, VIEW ONLY.
-Live scores come from ESPN's free public scoreboard, polled in the browser every 30s.
+Live scores come from ESPN's free public scoreboard, polled in the browser (smart adaptive interval).
 
 - **`index.html`** — the public site everyone views (never edit).
 - **`admin.html`** — YOUR private entry grid (click picks, generate `picks.js`).
