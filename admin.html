@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Picks Entry (Admin)</title>
+<style>
+  :root{--bg:#0b0f16;--card:#161d2a;--card2:#1d2636;--ink:#f2f6fb;--mut:#8f9cb0;
+        --line:#28313f;--grn:#33e08a;--red:#ff6060;--yel:#ffd23f;--blu:#4aa8ff;}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--ink)}
+  header{padding:14px 18px;background:linear-gradient(180deg,#1a1020,#0c1119);
+         border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+  h1{font-size:18px;margin:0;font-weight:800}
+  .sub{color:var(--mut);font-size:12px;margin-top:3px}
+  .adminflag{display:inline-block;background:rgba(255,96,96,.16);color:var(--red);
+     font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:8px;border:1px solid var(--red);margin-left:6px}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:0 0 12px;font-weight:800}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  label{font-size:12.5px;color:var(--mut);font-weight:700}
+  input,button,select{font:inherit;background:#0d131c;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+  button{cursor:pointer;background:#28374d;font-weight:700}
+  button.primary{background:var(--blu);border-color:var(--blu);color:#04121f;font-weight:800}
+  button:hover{filter:brightness(1.12)}
+
+  .grid-wrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:720px}
+  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);font-weight:800}
+  th.game,td.game{text-align:left}
+  .teambtns{display:inline-flex;gap:4px}
+  .tb{font-size:13px;font-weight:800;padding:5px 10px;border-radius:8px;background:#0d131c;border:1px solid var(--line);color:var(--ink);cursor:pointer;min-width:44px}
+  .tb.sel{background:var(--grn);border-color:var(--grn);color:#05210f}
+  .tball{font-size:12px;font-weight:700;color:var(--mut)}
+  .pcell{padding:4px}
+  .pcell.set{background:rgba(51,224,138,.07)}
+  .tbinput{width:64px;text-align:center}
+  .prog{font-size:12px;color:var(--mut);margin:6px 0}
+  .prog b{color:var(--ink)}
+  textarea{width:100%;min-height:220px;background:#0d131c;color:var(--ink);border:1px solid var(--line);
+           border-radius:10px;padding:12px;font:12.5px/1.5 Consolas,Menlo,monospace;white-space:pre}
+  .steps{font-size:13px;line-height:1.7;color:var(--mut)}
+  .steps b,.steps code{color:var(--ink)}
+  code{background:#0d131c;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-family:Consolas,Menlo,monospace}
+  .warn{background:rgba(255,210,63,.1);border:1px solid var(--yel);border-radius:10px;padding:12px;font-size:12.5px;line-height:1.5;margin-bottom:16px}
+  .ok{color:var(--grn)} .muted{color:var(--mut)}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+  .err{background:rgba(255,96,96,.12);border:1px solid var(--red);padding:10px;border-radius:9px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Picks Entry <span class="adminflag">ADMIN — only publishes if YOU push</span></h1>
+  <div class="sub">Click winners + type tiebreakers → generate <code>picks.js</code> → commit &amp; push. Friends can't publish; only your git push changes the live site.</div>
+</header>
+
+<div class="wrap">
+  <div class="warn">
+    🔒 <b>How this stays safe (Requirement A):</b> this page is static — it can't write to your repo. Clicking here only changes YOUR browser. The live site shows only what <b>you commit &amp; push</b> (needs your GitHub access). 🧾 <b>History (Requirement B):</b> every push is a timestamped git commit, and each generated file stamps an <code>_editLog</code> entry — a double receipt of what was entered and when.
+  </div>
+
+  <div id="errbox"></div>
+
+  <div class="card">
+    <div class="row">
+      <label>Week</label><input id="week" type="number" min="1" max="18" value="1" style="width:70px">
+      <label>Season</label><input id="season" type="number" value="2026" style="width:90px">
+      <button onclick="loadGames()">Load week's games from ESPN</button>
+      <span id="loadmsg" class="muted"></span>
+    </div>
+    <div class="prog" id="progress"></div>
+  </div>
+
+  <div class="card">
+    <h2>Entry grid — click each player's winner</h2>
+    <div class="grid-wrap"><table id="grid"><thead></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Tiebreaker — predicted TOTAL combined score of the last game</h2>
+    <div id="tbinfo" class="muted" style="margin-bottom:10px"></div>
+    <div class="row" id="tbrow"></div>
+  </div>
+
+  <div class="card">
+    <h2>Publish</h2>
+    <div class="btnrow">
+      <button class="primary" onclick="generate()">Generate picks.js</button>
+      <button onclick="copyOut()">Copy to clipboard</button>
+      <button onclick="downloadOut()">Download picks.js</button>
+      <button onclick="clearDraft()">Clear my draft</button>
+    </div>
+    <textarea id="out" placeholder="Click 'Generate picks.js' — the full file text appears here."></textarea>
+    <div class="steps" style="margin-top:12px">
+      <b>To publish (only you can do this):</b><br>
+      1. Click <b>Download picks.js</b> (or Copy) and replace the <code>picks.js</code> in your <code>2026-nfl-picks</code> folder.<br>
+      2. In that folder run:<br>
+      &nbsp;&nbsp;<code>git add picks.js</code><br>
+      &nbsp;&nbsp;<code>git commit -m "Week N picks"</code><br>
+      &nbsp;&nbsp;<code>git push</code><br>
+      3. Live site updates in ~1 min. The commit is your timestamped receipt.
+      <div class="muted" style="margin-top:8px">Your in-progress entry auto-saves in THIS browser (localStorage) so you won't lose it mid-call. It is NOT published until you push.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const PLAYERS = ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
+let GAMES = [];          // [{team1,team2,date}]
+let state = { picks:{}, tiebreaker:{} };  // picks[gameIdx][player]=abbr ; tiebreaker[player]=num
+let tiebreakerGame = null;
+
+const LS_KEY = () => `picksdraft_${document.getElementById("season").value}_${document.getElementById("week").value}`;
+
+function saveDraft(){ try{ localStorage.setItem(LS_KEY(), JSON.stringify(state)); }catch(e){} }
+function loadDraft(){ try{ const s=localStorage.getItem(LS_KEY()); if(s) state=JSON.parse(s); }catch(e){} }
+function clearDraft(){ try{ localStorage.removeItem(LS_KEY()); }catch(e){} state={picks:{},tiebreaker:{}}; renderGrid(); renderTb(); document.getElementById("out").value=""; }
+
+async function loadGames(){
+  const wk=document.getElementById("week").value, yr=document.getElementById("season").value;
+  const lm=document.getElementById("loadmsg"); const eb=document.getElementById("errbox");
+  lm.textContent="loading…"; eb.innerHTML="";
+  try{
+    const res=await fetch(`${ESPN}?week=${wk}&seasontype=2&dates=${yr}`,{cache:"no-store"});
+    if(!res.ok) throw new Error("ESPN "+res.status);
+    const data=await res.json();
+    const evs=(data.events||[]).slice().sort((a,b)=> new Date(a.date)-new Date(b.date));
+    GAMES = evs.map(ev=>{
+      const c=ev.competitions[0], comp=c.competitors;
+      const away=comp.find(x=>x.homeAway==="away")||comp[0];
+      const home=comp.find(x=>x.homeAway==="home")||comp[1];
+      return { team1: away.team.abbreviation, team2: home.team.abbreviation, date: ev.date };
+    });
+    tiebreakerGame = GAMES.length ? { team1: GAMES[GAMES.length-1].team1, team2: GAMES[GAMES.length-1].team2 } : null;
+    loadDraft();               // restore any in-progress entry for this week
+    renderGrid(); renderTb();
+    lm.textContent = `${GAMES.length} games loaded. Last game (tiebreaker): ${tiebreakerGame? tiebreakerGame.team1+" + "+tiebreakerGame.team2 : "—"}`;
+  }catch(e){
+    eb.innerHTML=`<div class="err">Couldn't load games (${e.message}). Check the week/season and try again.</div>`;
+    lm.textContent="";
+  }
+}
+
+function renderGrid(){
+  const thead=document.querySelector("#grid thead"), tbody=document.querySelector("#grid tbody");
+  thead.innerHTML = `<tr><th class="game">Game</th>${PLAYERS.map(p=>`<th>${p}</th>`).join("")}</tr>`;
+  tbody.innerHTML = GAMES.map((g,i)=>{
+    const cells = PLAYERS.map(p=>{
+      const sel=(state.picks[i]&&state.picks[i][p])||"";
+      const btn=(t)=>`<button class="tb ${sel===t?'sel':''}" onclick="pick(${i},'${p}','${t}')">${t}</button>`;
+      return `<td class="pcell ${sel?'set':''}"><span class="teambtns">${btn(g.team1)}${btn(g.team2)}</span></td>`;
+    }).join("");
+    return `<tr><td class="game"><b>${g.team1}</b> <span class="muted">vs</span> <b>${g.team2}</b></td>${cells}</tr>`;
+  }).join("");
+  updateProgress();
+}
+
+function renderTb(){
+  const info=document.getElementById("tbinfo"), row=document.getElementById("tbrow");
+  if(!tiebreakerGame){ info.textContent="Load games first."; row.innerHTML=""; return; }
+  info.innerHTML=`Tiebreaker game: <b>${tiebreakerGame.team1} @ ${tiebreakerGame.team2}</b> — enter each player's predicted total combined points.`;
+  row.innerHTML = PLAYERS.map(p=>{
+    const v=(state.tiebreaker[p]!=null)?state.tiebreaker[p]:"";
+    return `<span class="tball">${p} <input class="tbinput" type="number" min="0" value="${v}" oninput="setTb('${p}',this.value)"></span>`;
+  }).join("");
+}
+
+function pick(i,p,t){
+  state.picks[i]=state.picks[i]||{};
+  // toggle off if clicking the same pick again
+  state.picks[i][p] = (state.picks[i][p]===t) ? "" : t;
+  saveDraft(); renderGrid();
+}
+function setTb(p,v){ state.tiebreaker[p] = v===""?null:parseInt(v,10); saveDraft(); updateProgress(); }
+
+function updateProgress(){
+  let filled=0, total=GAMES.length*PLAYERS.length;
+  GAMES.forEach((g,i)=>PLAYERS.forEach(p=>{ if(state.picks[i]&&state.picks[i][p]) filled++; }));
+  const tbFilled=PLAYERS.filter(p=>state.tiebreaker[p]!=null && state.tiebreaker[p]!=="").length;
+  document.getElementById("progress").innerHTML =
+    `Picks entered: <b>${filled}/${total}</b> · tiebreakers: <b>${tbFilled}/${PLAYERS.length}</b>`+
+    (filled<total?` <span class="muted">(blanks are allowed — they just score as no-pick)</span>`:` <span class="ok">✓ complete</span>`);
+}
+
+function generate(){
+  if(!GAMES.length){ document.getElementById("errbox").innerHTML=`<div class="err">Load games first.</div>`; return; }
+  const wk=document.getElementById("week").value, yr=document.getElementById("season").value;
+  const q=(s)=>`"${s}"`;
+  const gameLines = GAMES.map((g,i)=>{
+    const picks=PLAYERS.map(p=>`${p}: ${q((state.picks[i]&&state.picks[i][p])||"")}`).join(", ");
+    return `    { team1: ${q(g.team1)}, team2: ${q(g.team2)}, picks: { ${picks} } },`;
+  }).join("\n");
+  const tb=PLAYERS.map(p=>`${p}: ${state.tiebreaker[p]!=null&&state.tiebreaker[p]!==""?state.tiebreaker[p]:0}`).join(", ");
+  const stamp=new Date().toISOString();
+  // read existing _editLog if picks.js is already loaded in this browser via viewer — else start fresh
+  const prevLog = (window.PICKS && Array.isArray(window.PICKS._editLog)) ? window.PICKS._editLog.slice() : [];
+  prevLog.push(`${stamp} — Week ${wk} ${yr} entered via admin grid`);
+  const logLines = prevLog.map(l=>`    ${q(l)},`).join("\n");
+
+  const out =
+`/* ============================================================================
+   PICKS DATA FILE — generated by admin.html on ${stamp}
+   Edit via admin.html (click grid), NOT by hand. Then: git add picks.js ; git commit ; git push
+   PLAYERS: ${PLAYERS.join(", ")}
+   ============================================================================ */
+window.PICKS = {
+  week: ${parseInt(wk,10)},
+  season: ${parseInt(yr,10)},
+
+  players: [${PLAYERS.map(q).join(", ")}],
+
+  games: [
+${gameLines}
+  ],
+
+  tiebreakerGame: { team1: ${q(tiebreakerGame.team1)}, team2: ${q(tiebreakerGame.team2)} },
+  tiebreaker: { ${tb} },
+
+  // Edit history (receipt of what was entered and when). Appended each time you generate.
+  _editLog: [
+${logLines}
+  ],
+};
+`;
+  document.getElementById("out").value=out;
+}
+
+function copyOut(){ const t=document.getElementById("out"); if(!t.value){generate();} t.select(); document.execCommand("copy"); }
+function downloadOut(){ const t=document.getElementById("out"); if(!t.value){generate();}
+  const blob=new Blob([t.value],{type:"text/javascript"}); const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="picks.js"; a.click(); }
+
+// boot: default week to whatever ESPN currently shows, then load
+(async function(){
+  try{
+    const res=await fetch(ESPN,{cache:"no-store"});
+    if(res.ok){ const d=await res.json(); if(d.week&&d.week.number) document.getElementById("week").value=d.week.number;
+      if(d.season&&d.season.year) document.getElementById("season").value=d.season.year; }
+  }catch(e){}
+  loadGames();
+})();
+</script>
+</body>
+</html>
