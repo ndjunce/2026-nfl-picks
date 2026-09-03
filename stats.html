@@ -53,6 +53,18 @@
   .wk .lab{color:var(--mut);font-weight:800}
   .wk .win{font-weight:800}
   .streak{color:var(--grn);font-weight:800}
+  details summary{cursor:pointer;font-size:12px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--mut);font-weight:800;list-style:none}
+  details summary::-webkit-details-marker{display:none}
+  details summary::before{content:"▸ ";color:var(--blu)}
+  details[open] summary::before{content:"▾ "}
+  .trow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .trow:last-child{border-bottom:none}
+  .trow .who{display:flex;align-items:center;gap:8px;min-width:120px;font-weight:800}
+  .thi{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px}
+  .thi .k{color:var(--mut);font-weight:800}
+  .tlogo{width:18px;height:18px;object-fit:contain;vertical-align:middle;margin-right:2px}
+  .trust{color:var(--grn)} .krypt{color:var(--red)}
   @media (min-width:820px){
     .wrap{max-width:1080px;padding:22px}
     h1{font-size:26px}
@@ -101,6 +113,13 @@
     <div class="grid-wrap"><table id="weekly"><thead></thead><tbody></tbody></table></div>
   </div>
 
+  <div class="card">
+    <details id="teamrecs">
+      <summary>🔎 Team tendencies <span class="muted" style="font-weight:400">— tap to expand</span></summary>
+      <div id="teamrecs-body" style="margin-top:12px"></div>
+    </details>
+  </div>
+
   <div class="note" id="foot"></div>
 </div>
 
@@ -119,6 +138,8 @@ function photoImgErr(img){
 function avatar(n){ const i=String(n||"?").slice(0,1).toUpperCase();
   return `<img class="avatar" src="${photoUrl(n)}" alt="${n}" onerror="photoImgErr(this)"><span class="avatar-fb" style="display:none">${i}</span>`; }
 function pct(w,l){ const g=w+l; return g? Math.round(100*w/g) : 0; }
+function teamLogo(a){ const A=String(a).toUpperCase();
+  return `<img class="tlogo" src="https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/${A.toLowerCase()}.png" alt="${A}" onerror="this.replaceWith(document.createTextNode('${A} '))">`; }
 
 // Grade the CURRENT week live from picks.js + ESPN (results + tiebreaker actual total).
 async function currentWeekResult(){
@@ -148,7 +169,11 @@ async function currentWeekResult(){
   let tbActual=null;
   if(PICKS.tiebreakerGame){ const tbi=gmap[mkey(PICKS.tiebreakerGame.team1,PICKS.tiebreakerGame.team2)];
     if(tbi&&tbi.completed) tbActual=tbi.total; }
-  return { week: PICKS.week, results, tiebreaker: PICKS.tiebreaker||{}, tbActual,
+  // per-game detail (picks + winner) for team-tendency stats — only final games
+  const games=PICKS.games.map(g=>{ const info=gmap[mkey(g.team1,g.team2)];
+    return (info&&info.completed&&info.winner)
+      ? { team1:g.team1, team2:g.team2, winner:info.winner.toUpperCase(), picks:g.picks } : null; }).filter(Boolean);
+  return { week: PICKS.week, results, tiebreaker: PICKS.tiebreaker||{}, tbActual, games,
            live:true, noneFinal: !anyFinal };
 }
 
@@ -270,6 +295,33 @@ function decideWeek(wk){
     wTb.innerHTML=PLAYERS.map(p=>{
       const cells=weekNums.map(w=>{const r=tot[p].byWeek[w]; return `<td>${r&&(r.w+r.l)>0?`${r.w}-${r.l}`:'—'}</td>`;}).join("");
       return `<tr><td class="player"><span class="pcell">${avatar(p)}<span class="nm">${p}</span></span></td>${cells}</tr>`;
+    }).join("");
+  }
+
+  // ---- Team tendencies (collapsed): per player, only 2-3 highlights, never a 32-team wall ----
+  // Aggregate per-player per-team records from any week that carries game-level detail.
+  const teamRec={}; PLAYERS.forEach(p=>teamRec[p]={});
+  weeks.forEach(wk=>{ (wk.games||[]).forEach(g=>{
+    const win=String(g.winner||"").toUpperCase();
+    PLAYERS.forEach(p=>{ const pk=(g.picks&&g.picks[p]||"").toUpperCase(); if(!pk||!win) return;
+      const r=teamRec[p][pk]||(teamRec[p][pk]={w:0,l:0}); if(pk===win) r.w++; else r.l++; });
+  }); });
+  const trBody=document.getElementById("teamrecs-body");
+  const anyTeamData=PLAYERS.some(p=>Object.keys(teamRec[p]).length);
+  if(!anyTeamData){
+    trBody.innerHTML=`<div class="muted" style="font-size:12.5px">Builds up as games finish — each player's most-picked team, and the team that burns them most.</div>`;
+  } else {
+    trBody.innerHTML=PLAYERS.map(p=>{
+      const teams=Object.entries(teamRec[p]); // [abbr,{w,l}]
+      if(!teams.length) return `<div class="trow"><span class="who">${avatar(p)}${p}</span><span class="thi muted">no graded picks yet</span></div>`;
+      // most-trusted = most times picked
+      const trusted=teams.slice().sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l))[0];
+      // kryptonite = worst record among teams picked >=2 times (fall back to any losing team)
+      const losers=teams.filter(([t,r])=>(r.w+r.l)>=2).sort((a,b)=> (a[1].w-a[1].l)-(b[1].w-b[1].l));
+      const krypt=(losers.length && (losers[0][1].l>losers[0][1].w))?losers[0]:null;
+      const hi=[`<span><span class="k">Most-picked:</span> ${teamLogo(trusted[0])}${trusted[0]} <span class="trust">${trusted[1].w}-${trusted[1].l}</span></span>`];
+      if(krypt) hi.push(`<span><span class="k">Kryptonite:</span> ${teamLogo(krypt[0])}${krypt[0]} <span class="krypt">${krypt[1].w}-${krypt[1].l}</span></span>`);
+      return `<div class="trow"><span class="who">${avatar(p)}${p}</span><span class="thi">${hi.join("")}</span></div>`;
     }).join("");
   }
 

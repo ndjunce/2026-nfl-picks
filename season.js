@@ -12,7 +12,10 @@
      week: 1,
      results: { Nick:{w:11,l:5}, Clyde:{w:9,l:7}, ... },   // correct picks per player
      tiebreaker: { Nick:44, Clyde:51, ... },               // each player's predicted total (optional)
-     tbActual: 48                                          // actual last-game combined total (optional)
+     tbActual: 48,                                         // actual last-game combined total (optional)
+     games: [ { team1:"KC", team2:"LAC", winner:"KC",      // (optional) per-game detail powers the
+                picks:{Nick:"KC",Clyde:"LAC", ...} } ]     //   "Team tendencies" panel; omit if you
+                                                           //   only want W-L totals for that week.
    }
    If tiebreaker/tbActual are omitted, a tied week is shown as TIED (no winner).
    ============================================================================ */

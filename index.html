@@ -64,6 +64,7 @@
 
   .refresh{text-align:center;color:var(--mut);font-size:11.5px;margin:4px 0 18px}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);margin-right:5px;vertical-align:middle}
+  .dot.idle{background:var(--mut)}
   .err{background:rgba(255,96,96,.12);border:1px solid var(--red);color:var(--ink);padding:12px;border-radius:10px;font-size:13px}
   .note{color:var(--mut);font-size:11px;text-align:center;margin-top:8px}
   .muted{color:var(--mut)}
@@ -148,7 +149,11 @@
 <script src="picks.js"></script>
 <script>
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
-const POLL_MS = 30000;
+// Smart adaptive polling: interval depends on whether games are live / today / done.
+const POLL_LIVE  = 50000;    // ~50s while any game is IN PROGRESS (catches in->post grading)
+const POLL_SOON  = 240000;   // ~4 min when games are today but none live yet / between games
+const POLL_IDLE  = 1500000;  // ~25 min when no games today or all games FINAL
+let pollTimer = null;
 
 // Normalize a matchup to an unordered key so pick order (team1/team2) doesn't matter.
 function mkey(a, b){ return [a.toUpperCase(), b.toUpperCase()].sort().join("|"); }
@@ -179,6 +184,27 @@ function fmtCT(iso){
     return new Intl.DateTimeFormat("en-US",{ timeZone:"America/Chicago",
       weekday:"short", hour:"numeric", minute:"2-digit" }).format(d) + " CT";
   }catch(e){ return ""; }
+}
+// The current wall-clock time (America/Chicago) as a "YYYY-MM-DD" string.
+function ymdCT(d){
+  try{ return new Intl.DateTimeFormat("en-CA",{ timeZone:"America/Chicago",
+      year:"numeric", month:"2-digit", day:"2-digit" }).format(d); }
+  catch(e){ return d.toISOString().slice(0,10); }
+}
+function isTodayCT(iso){ const d=new Date(iso); if(isNaN(d)) return false; return ymdCT(d)===ymdCT(new Date()); }
+// Adaptive poll summary (set by render) + tier selection.
+let pollSummary = { anyLive:false, gamesToday:false, allFinal:false, anyPre:true };
+function nextPollMs(){
+  if(pollSummary.anyLive) return POLL_LIVE;              // a game is live -> catch in->post fast
+  if(pollSummary.allFinal) return POLL_IDLE;             // week done -> back off
+  if(pollSummary.gamesToday) return POLL_SOON;           // games today, none live yet -> medium
+  return POLL_IDLE;                                       // no games today -> slow
+}
+function pollLabel(){
+  if(pollSummary.anyLive) return "live now · checking ~50s";
+  if(pollSummary.allFinal) return "all games final · slow check";
+  if(pollSummary.gamesToday) return "games today · checking ~4 min";
+  return "no games today · slow check";
 }
 
 // ---- player photos (committed under /players/<name>.jpg; falls back to initials circle) ----
@@ -280,6 +306,14 @@ function render(data){
     gamesOut.push({g, info});
   });
 
+  // ---- polling summary: are any games live / today / all final? (drives adaptive polling) ----
+  const allInfos = Object.values(gmap);
+  const anyLive = allInfos.some(x=>x.state==="in");
+  const anyPre  = allInfos.some(x=>x.state==="pre");
+  const gamesToday = allInfos.some(x=>x.date && isTodayCT(x.date));
+  const allFinal = allInfos.length>0 && allInfos.every(x=>x.completed);
+  pollSummary = { anyLive, gamesToday, allFinal, anyPre };
+
   // ---- tiebreaker ----
   const tbInfo = gmap[mkey(PICKS.tiebreakerGame.team1, PICKS.tiebreakerGame.team2)];
   const tbActual = (tbInfo && tbInfo.completed) ? tbInfo.total : null;
@@ -363,20 +397,32 @@ function render(data){
     `Week ${PICKS.week} · ${PICKS.season} · ${PICKS.players.length} players`;
 }
 
+function updatedCT(){
+  try{ return new Intl.DateTimeFormat("en-US",{ timeZone:"America/Chicago",
+      hour:"numeric", minute:"2-digit", second:"2-digit" }).format(new Date()) + " CT"; }
+  catch(e){ return new Date().toLocaleTimeString(); }
+}
+function scheduleNext(){
+  if(pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(tick, nextPollMs());
+}
 async function tick(){
   const rf = document.getElementById("refresh");
   const eb = document.getElementById("errbox");
   try{
     const data = await fetchScores();
     lastGood = data; eb.innerHTML="";
-    render(data);
-    rf.innerHTML = `<span class="dot"></span>Live — updated ${new Date().toLocaleTimeString()} · auto-refresh every 30s`;
+    render(data);   // updates pollSummary
+    const dotCls = pollSummary.anyLive ? "dot" : "dot idle";
+    rf.innerHTML = `<span class="${dotCls}"></span>Updated ${updatedCT()} · ${pollLabel()}`;
   }catch(e){
     // Don't blank the page on a transient failure — keep last good render.
     if(lastGood){ render(lastGood); }
     else { render(null); }   // still show picks + leaderboard (0 wins) even with no scores yet
-    eb.innerHTML = `<div class="err">Couldn't reach the live-score feed just now (${e.message}). Showing picks; scores will fill in on the next refresh. If this persists, ESPN may be briefly unavailable.</div>`;
-    rf.innerHTML = `retrying every 30s…`;
+    eb.innerHTML = `<div class="err">Couldn't reach the live-score feed just now (${e.message}). Showing picks; scores will fill in on the next check.</div>`;
+    rf.innerHTML = `retrying…`;
+  }finally{
+    scheduleNext();   // adaptive: reschedule based on the latest game states
   }
 }
 
@@ -386,8 +432,9 @@ if(typeof PICKS==="undefined"){
     `<div class="err">picks.js didn't load. Make sure picks.js is in the same folder as index.html.</div>`;
 } else {
   render(null);   // instant paint: picks + leaderboard show immediately, before scores arrive
-  tick();
-  setInterval(tick, POLL_MS);
+  tick();         // first fetch; tick() reschedules itself adaptively via scheduleNext()
+  // If the tab is hidden, the browser throttles timers anyway; when it regains focus, refresh promptly.
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) tick(); });
 }
 </script>
 </body>
