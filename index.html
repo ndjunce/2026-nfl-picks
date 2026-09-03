@@ -76,6 +76,18 @@
   .tabs a:hover{color:var(--ink);border-color:var(--blu)}
   .tabs a.active{color:#04121f;background:var(--blu);border-color:var(--blu)}
   .tabs a.soon{opacity:.5;pointer-events:none}
+  /* week selector tabs (Week 1..18) */
+  .weekbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .weekbar .wk{min-width:40px;text-align:center;padding:7px 10px;border-radius:9px;font-size:12.5px;
+       font-weight:800;cursor:pointer;background:#0d131c;border:1px solid var(--line);color:var(--mut);transition:.12s}
+  .weekbar .wk:hover{color:var(--ink);border-color:var(--blu)}
+  .weekbar .wk.active{background:var(--blu);border-color:var(--blu);color:#04121f}
+  .weekbar .wk.has{color:var(--ink)}
+  .weekbar .wk.empty{opacity:.4;cursor:default}
+  .weekbar .wk.live{border-color:var(--grn)}
+  .weekbar .wk .dotlive{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--grn);margin-left:4px;vertical-align:middle}
+  .weeklbl{font-size:11px;color:var(--mut);text-align:center;margin-bottom:12px}
+
   /* deciding games */
   .dg{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;
       background:var(--bg);border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
@@ -123,6 +135,9 @@
 <div class="wrap">
   <div id="errbox"></div>
 
+  <div class="weekbar" id="weekbar"></div>
+  <div class="weeklbl" id="weeklbl"></div>
+
   <div class="card">
     <h2>🏆 Leaderboard</h2>
     <div class="lb" id="leaderboard"></div>
@@ -145,8 +160,9 @@
   <div class="note">Live scores from ESPN's public scoreboard, updated in your browser. Picks are read from <code>picks.js</code>.</div>
 </div>
 
-<!-- the ONLY file that changes each week -->
+<!-- picks.js = the current (live) week; season.js = archived past weeks (both drive the week tabs) -->
 <script src="picks.js"></script>
+<script src="season.js"></script>
 <script>
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 // Smart adaptive polling: interval depends on whether games are live / today / done.
@@ -222,6 +238,26 @@ function avatar(name){
 
 let lastGood = null;   // last successful ESPN payload (so a failed poll doesn't blank the page)
 
+// ---- week state --------------------------------------------------------------
+// The LIVE week = the one in picks.js (fetched from ESPN, graded live, auto-polled).
+// PAST weeks = archived in season.js (SEASON.weeks[].games[] carries team1/team2/winner/picks).
+// The week tabs let you view any week; only the live week polls ESPN.
+const LIVE_WEEK = (window.PICKS && PICKS.week) || 1;
+const TOTAL_WEEKS = 18;
+let selectedWeek = LIVE_WEEK;
+
+// Archived weeks keyed by week number (from season.js).
+const ARCHIVE = {};
+if(window.SEASON && Array.isArray(SEASON.weeks)){
+  SEASON.weeks.forEach(w=>{ if(w && w.week!=null) ARCHIVE[w.week] = w; });
+}
+// A week "has data" if it's the live week, or it's archived with game detail.
+function weekHasData(n){
+  if(n===LIVE_WEEK) return true;
+  const a = ARCHIVE[n];
+  return !!(a && Array.isArray(a.games) && a.games.length);
+}
+
 async function fetchScores(){
   // Query the specific week so results are correct even after the week rolls over.
   const url = `${ESPN}?week=${PICKS.week}&seasontype=2&dates=${PICKS.season}`;
@@ -285,6 +321,122 @@ function renderDeciding(gamesOut){
       <span style="display:flex;align-items:center;gap:8px">${detail}${tag}</span>
     </div>`;
   }).join("");
+}
+
+// Render the Week 1..18 tab bar. Weeks with data are clickable; empty weeks are dimmed.
+function renderWeekBar(){
+  const bar = document.getElementById("weekbar"); if(!bar) return;
+  let html = "";
+  for(let n=1; n<=TOTAL_WEEKS; n++){
+    const has = weekHasData(n);
+    const isLive = (n===LIVE_WEEK);
+    const cls = ["wk", has?"has":"empty", n===selectedWeek?"active":"", isLive?"live":""].filter(Boolean).join(" ");
+    const live = isLive ? `<span class="dotlive" title="current week"></span>` : "";
+    const click = has ? ` onclick="selectWeek(${n})"` : "";
+    html += `<div class="${cls}"${click} title="${has?('View week '+n):('Week '+n+' — not entered yet')}">${n}${live}</div>`;
+  }
+  bar.innerHTML = html;
+  const lbl = document.getElementById("weeklbl");
+  if(lbl){
+    lbl.innerHTML = selectedWeek===LIVE_WEEK
+      ? `Showing <b>Week ${selectedWeek}</b> (current — live scores)`
+      : `Showing <b>Week ${selectedWeek}</b> (final results) · <span class="muted">tap ${LIVE_WEEK} for the live week</span>`;
+  }
+}
+
+// Switch weeks. Live week -> resume live polling; past week -> render from the archive (no polling).
+function selectWeek(n){
+  if(!weekHasData(n)) return;
+  selectedWeek = n;
+  renderWeekBar();
+  if(n===LIVE_WEEK){
+    if(lastGood) render(lastGood); else render(null);
+    tick();                 // resume live fetch/poll for the current week
+  } else {
+    if(pollTimer) clearTimeout(pollTimer);   // stop polling while viewing a finished week
+    renderArchivedWeek(ARCHIVE[n]);
+    const rf = document.getElementById("refresh");
+    if(rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — final results (archived)`;
+  }
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+// Render a finished, archived week from season.js (games carry winner + picks; all final).
+function renderArchivedWeek(wk){
+  if(!wk){ return; }
+  const players = PICKS.players;
+  // Build a games+info list in the same shape render() uses, but from the archive.
+  const gamesOut = (wk.games||[]).map(g=>{
+    const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
+    const win = g.winner ? g.winner.toUpperCase() : null;
+    const s = g.scores || {};
+    return { g:{team1:g.team1, team2:g.team2, picks:g.picks||{}},
+             info:{ state:"post", completed:true, winner:win, detail:"",
+                    total:(wk.tbActual!=null?wk.tbActual:null),
+                    scores:{ [A]:(s[A]!=null?s[A]:null), [B]:(s[B]!=null?s[B]:null) } } };
+  });
+
+  // grade
+  const wins={}, played={}; players.forEach(p=>{wins[p]=0;played[p]=0;});
+  gamesOut.forEach(({g,info})=>{
+    players.forEach(p=>{ const pick=(g.picks[p]||"").toUpperCase();
+      if(info.winner){ played[p]++; if(pick===info.winner) wins[p]++; } });
+  });
+
+  // leaderboard (with tiebreaker if archived)
+  const tbActual = (wk.tbActual!=null)?wk.tbActual:null;
+  const tbPreds = wk.tiebreaker||{};
+  const rows = players.map(p=>({ name:p, wins:wins[p], played:played[p],
+    tb:(tbPreds[p]!=null?tbPreds[p]:null),
+    tbDiff:(tbActual!=null && tbPreds[p]!=null)?Math.abs(tbPreds[p]-tbActual):null }));
+  rows.sort((a,b)=> (b.wins-a.wins) || ((a.tbDiff!=null&&b.tbDiff!=null)?a.tbDiff-b.tbDiff:0));
+  const topWins = rows.length?rows[0].wins:0;
+
+  const lb = document.getElementById("leaderboard");
+  lb.innerHTML = rows.map((r,i)=>{
+    const leading = r.wins===topWins && topWins>0;
+    const isMe = r.name==="Nick";
+    const cls = "lbrow"+(leading?" lead":(isMe?" me":""));
+    const rec = r.played>0 ? `${r.wins}-${r.played-r.wins}` : "—";
+    return `<div class="${cls}"><span class="rk">${i+1}</span><span>${avatar(r.name)}</span>`
+      +`<span class="nm">${leading?'<span class="crown">👑</span> ':''}${r.name}</span>`
+      +`<span class="rec">${rec}</span><span class="w">${r.wins}</span></div>`;
+  }).join("");
+
+  const tb = document.getElementById("tiebreak");
+  const tbg = `${(wk.games&&wk.games.length)?wk.games[wk.games.length-1].team1:''} + ${(wk.games&&wk.games.length)?wk.games[wk.games.length-1].team2:''}`;
+  if(tbActual!=null){
+    const best = rows.filter(r=>r.tbDiff!=null).sort((a,b)=>a.tbDiff-b.tbDiff)[0];
+    tb.innerHTML = `<b>Tiebreaker</b> total: actual <b>${tbActual}</b>. `
+      + players.map(p=>`${p} ${tbPreds[p]!=null?tbPreds[p]:'?'}`).join(" · ")
+      + (best?` — closest: <b>${best.name}</b>`:"");
+  } else {
+    tb.innerHTML = `<b>Tiebreaker</b>: ` + players.map(p=>`${p} ${tbPreds[p]!=null?tbPreds[p]:'?'}`).join(" · ");
+  }
+
+  // deciding games + games list reuse the shared renderers
+  renderDeciding(gamesOut);
+
+  const gel = document.getElementById("games");
+  gel.innerHTML = gamesOut.map(({g,info})=>{
+    const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
+    const win = info.winner?info.winner.toUpperCase():null;
+    const teamSpan=(t)=>{ const cls = win ? (t===win?"won":"lost") : ""; return `<span class="${cls}">${teamChip(t, cls)}</span>`; };
+    const hasScores = info.scores && (info.scores[A]!=null || info.scores[B]!=null);
+    const sc = hasScores ? `<span class="score">${A} ${info.scores[A]!=null?info.scores[A]:'–'} – ${B} ${info.scores[B]!=null?info.scores[B]:'–'}</span>` : "";
+    const pks = players.map(p=>{ const pick=(g.picks[p]||"").toUpperCase();
+      let c=""; if(win) c=(pick===win)?" correct":" wrong";
+      const pk = pick ? teamChip(pick) : '<span class="pick">—</span>';
+      return `<span class="pk${c}"><span class="who">${p}:</span> ${pk}</span>`; }).join("");
+    return `<div class="game"><div class="ghead">
+        <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}</span>
+        <span class="gstatus s-post">FINAL</span></div>
+      ${sc?`<div style="margin-bottom:8px">${sc}</div>`:""}
+      <div class="picks">${pks}</div></div>`;
+  }).join("");
+
+  document.getElementById("subhead").textContent =
+    `Week ${wk.week} · ${PICKS.season} · ${players.length} players · final`;
 }
 
 function render(data){
@@ -404,18 +556,23 @@ function updatedCT(){
 }
 function scheduleNext(){
   if(pollTimer) clearTimeout(pollTimer);
+  if(selectedWeek!==LIVE_WEEK) return;   // don't schedule polls while viewing a finished week
   pollTimer = setTimeout(tick, nextPollMs());
 }
 async function tick(){
+  // Only the live week polls ESPN. If viewing an archived week, don't fetch/overwrite it.
+  if(selectedWeek!==LIVE_WEEK) return;
   const rf = document.getElementById("refresh");
   const eb = document.getElementById("errbox");
   try{
     const data = await fetchScores();
     lastGood = data; eb.innerHTML="";
+    if(selectedWeek!==LIVE_WEEK) return;   // user switched away mid-fetch
     render(data);   // updates pollSummary
     const dotCls = pollSummary.anyLive ? "dot" : "dot idle";
     rf.innerHTML = `<span class="${dotCls}"></span>Updated ${updatedCT()} · ${pollLabel()}`;
   }catch(e){
+    if(selectedWeek!==LIVE_WEEK) return;
     // Don't blank the page on a transient failure — keep last good render.
     if(lastGood){ render(lastGood); }
     else { render(null); }   // still show picks + leaderboard (0 wins) even with no scores yet
@@ -431,10 +588,11 @@ if(typeof PICKS==="undefined"){
   document.getElementById("errbox").innerHTML =
     `<div class="err">picks.js didn't load. Make sure picks.js is in the same folder as index.html.</div>`;
 } else {
-  render(null);   // instant paint: picks + leaderboard show immediately, before scores arrive
-  tick();         // first fetch; tick() reschedules itself adaptively via scheduleNext()
+  renderWeekBar();  // draw the Week 1..18 tabs (current week active, archived weeks clickable)
+  render(null);     // instant paint: picks + leaderboard show immediately, before scores arrive
+  tick();           // first fetch; tick() reschedules itself adaptively via scheduleNext()
   // If the tab is hidden, the browser throttles timers anyway; when it regains focus, refresh promptly.
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) tick(); });
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && selectedWeek===LIVE_WEEK) tick(); });
 }
 </script>
 </body>
