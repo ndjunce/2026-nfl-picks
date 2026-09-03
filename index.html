@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NFL Picks Tracker</title>
+<style>
+  :root{--bg:#0b0f16;--card:#161d2a;--card2:#1d2636;--ink:#f2f6fb;--mut:#8f9cb0;
+        --line:#28313f;--grn:#33e08a;--red:#ff6060;--yel:#ffd23f;--blu:#4aa8ff;--gold:#ffcf3f;}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+  header{padding:16px;text-align:center;background:linear-gradient(180deg,#121a26,#0c1119);
+         border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+  h1{font-size:20px;margin:0;font-weight:800;letter-spacing:.3px}
+  .sub{color:var(--mut);font-size:12.5px;margin-top:3px}
+  .wrap{max-width:760px;margin:0 auto;padding:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:0 0 12px;font-weight:800}
+
+  /* leaderboard */
+  .lb{display:flex;flex-direction:column;gap:8px}
+  .lbrow{display:grid;grid-template-columns:26px 1fr auto auto;gap:10px;align-items:center;
+         padding:11px 12px;background:var(--bg);border:1px solid var(--line);border-radius:11px}
+  .lbrow.me{border-color:var(--blu)}
+  .lbrow.lead{border-color:var(--gold);background:rgba(255,207,63,.07)}
+  .lbrow .rk{font-weight:800;color:var(--mut);text-align:center}
+  .lbrow .nm{font-weight:800;font-size:16px}
+  .lbrow .nm .crown{color:var(--gold)}
+  .lbrow .rec{font-variant-numeric:tabular-nums;color:var(--mut);font-size:13px}
+  .lbrow .w{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;min-width:34px;text-align:right}
+  .tiebreak{color:var(--mut);font-size:11.5px;margin-top:10px;line-height:1.5}
+  .tiebreak b{color:var(--ink)}
+
+  /* games */
+  .games{display:flex;flex-direction:column;gap:12px}
+  .game{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .ghead{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+  .matchup{font-weight:800;font-size:15px}
+  .matchup .won{color:var(--grn)}
+  .matchup .lost{color:var(--mut)}
+  .gstatus{font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .s-pre{background:#0d131c;color:var(--mut);border:1px solid var(--line)}
+  .s-in{background:rgba(255,96,96,.16);color:var(--red)}
+  .s-post{background:rgba(51,224,138,.16);color:var(--grn)}
+  .score{color:var(--mut);font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .picks{display:flex;flex-wrap:wrap;gap:6px}
+  .pk{font-size:12px;font-weight:700;padding:4px 9px;border-radius:8px;background:#0d131c;border:1px solid var(--line)}
+  .pk .who{color:var(--mut)}
+  .pk.correct{background:rgba(51,224,138,.14);border-color:rgba(51,224,138,.5)}
+  .pk.wrong{background:rgba(255,96,96,.12);border-color:rgba(255,96,96,.45);opacity:.8}
+  .pk.correct .pick{color:var(--grn)} .pk.wrong .pick{color:var(--red)}
+
+  .refresh{text-align:center;color:var(--mut);font-size:11.5px;margin:4px 0 18px}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);margin-right:5px;vertical-align:middle}
+  .err{background:rgba(255,96,96,.12);border:1px solid var(--red);color:var(--ink);padding:12px;border-radius:10px;font-size:13px}
+  .note{color:var(--mut);font-size:11px;text-align:center;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏈 NFL Picks Tracker</h1>
+  <div class="sub" id="subhead">Loading…</div>
+</header>
+
+<div class="wrap">
+  <div id="errbox"></div>
+
+  <div class="card">
+    <h2>🏆 Leaderboard</h2>
+    <div class="lb" id="leaderboard"></div>
+    <div class="tiebreak" id="tiebreak"></div>
+  </div>
+
+  <div class="refresh" id="refresh"></div>
+
+  <div class="card">
+    <h2>Games &amp; Picks</h2>
+    <div class="games" id="games"></div>
+  </div>
+
+  <div class="note">Live scores from ESPN's public scoreboard, updated in your browser. Picks are read from <code>picks.js</code>.</div>
+</div>
+
+<!-- the ONLY file that changes each week -->
+<script src="picks.js"></script>
+<script>
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const POLL_MS = 30000;
+
+// Normalize a matchup to an unordered key so pick order (team1/team2) doesn't matter.
+function mkey(a, b){ return [a.toUpperCase(), b.toUpperCase()].sort().join("|"); }
+
+let lastGood = null;   // last successful ESPN payload (so a failed poll doesn't blank the page)
+
+async function fetchScores(){
+  // Query the specific week so results are correct even after the week rolls over.
+  const url = `${ESPN}?week=${PICKS.week}&seasontype=2&dates=${PICKS.season}`;
+  const res = await fetch(url, {cache:"no-store"});
+  if(!res.ok) throw new Error("ESPN "+res.status);
+  return res.json();
+}
+
+// Build a map: matchup key -> {state, completed, winnerAbbr, total, detail, scores}
+function indexGames(data){
+  const m = {};
+  (data.events||[]).forEach(ev=>{
+    const c = ev.competitions && ev.competitions[0]; if(!c) return;
+    const comp = c.competitors||[];
+    const t1 = comp[0], t2 = comp[1]; if(!t1||!t2) return;
+    const a1 = t1.team.abbreviation, a2 = t2.team.abbreviation;
+    const st = c.status && c.status.type ? c.status.type : {};
+    let winner = null;
+    if(st.completed){ winner = (t1.winner? a1 : (t2.winner? a2 : null)); }
+    const s1 = parseInt(t1.score||0,10), s2 = parseInt(t2.score||0,10);
+    m[mkey(a1,a2)] = {
+      state: st.state||"pre", completed: !!st.completed, detail: st.shortDetail||"",
+      winner, total: s1+s2,
+      scores: { [a1.toUpperCase()]: s1, [a2.toUpperCase()]: s2 }
+    };
+  });
+  return m;
+}
+
+function render(data){
+  const gmap = data ? indexGames(data) : {};
+  // ---- grade each player ----
+  const wins = {}, played = {};
+  PICKS.players.forEach(p=>{ wins[p]=0; played[p]=0; });
+  const gamesOut = [];
+
+  PICKS.games.forEach(g=>{
+    const info = gmap[mkey(g.team1, g.team2)] || {state:"pre", completed:false, winner:null, detail:"", scores:{}};
+    PICKS.players.forEach(p=>{
+      const pick = (g.picks[p]||"").toUpperCase();
+      if(info.completed && info.winner){
+        played[p]++;
+        if(pick === info.winner.toUpperCase()) wins[p]++;
+      }
+    });
+    gamesOut.push({g, info});
+  });
+
+  // ---- tiebreaker ----
+  const tbInfo = gmap[mkey(PICKS.tiebreakerGame.team1, PICKS.tiebreakerGame.team2)];
+  const tbActual = (tbInfo && tbInfo.completed) ? tbInfo.total : null;
+
+  // ---- leaderboard: sort by wins desc, then tiebreaker closeness (if game final) ----
+  const rows = PICKS.players.map(p=>({
+    name:p, wins:wins[p], played:played[p],
+    tb:(PICKS.tiebreaker&&PICKS.tiebreaker[p]!=null)?PICKS.tiebreaker[p]:null,
+    tbDiff:(tbActual!=null && PICKS.tiebreaker&&PICKS.tiebreaker[p]!=null)?Math.abs(PICKS.tiebreaker[p]-tbActual):null
+  }));
+  rows.sort((a,b)=>{
+    if(b.wins!==a.wins) return b.wins-a.wins;
+    if(a.tbDiff!=null && b.tbDiff!=null && a.tbDiff!==b.tbDiff) return a.tbDiff-b.tbDiff;
+    return 0;
+  });
+  const topWins = rows.length?rows[0].wins:0;
+
+  const lb = document.getElementById("leaderboard");
+  lb.innerHTML = rows.map((r,i)=>{
+    const leading = r.wins===topWins && topWins>0;
+    const isMe = r.name==="Nick";
+    const cls = "lbrow"+(leading?" lead":(isMe?" me":""));
+    const rec = r.played>0 ? `${r.wins}-${r.played-r.wins}` : "—";
+    return `<div class="${cls}">
+      <span class="rk">${i+1}</span>
+      <span class="nm">${leading?'<span class="crown">👑</span> ':''}${r.name}</span>
+      <span class="rec">${rec}</span>
+      <span class="w">${r.wins}</span>
+    </div>`;
+  }).join("");
+
+  // tiebreaker line
+  const tb = document.getElementById("tiebreak");
+  const tbg = `${PICKS.tiebreakerGame.team1} + ${PICKS.tiebreakerGame.team2}`;
+  if(tbActual!=null){
+    const best = rows.filter(r=>r.tbDiff!=null).sort((a,b)=>a.tbDiff-b.tbDiff)[0];
+    tb.innerHTML = `<b>Tiebreaker</b> (${tbg} total): actual <b>${tbActual}</b>. `+
+      PICKS.players.map(p=>`${p} ${PICKS.tiebreaker?PICKS.tiebreaker[p]:'?'}`).join(" · ")+
+      (best?` — closest: <b>${best.name}</b>`:"");
+  } else {
+    tb.innerHTML = `<b>Tiebreaker</b> (${tbg} total, resolves when that game ends): `+
+      PICKS.players.map(p=>`${p} ${PICKS.tiebreaker?PICKS.tiebreaker[p]:'?'}`).join(" · ");
+  }
+
+  // ---- games list ----
+  const gel = document.getElementById("games");
+  gel.innerHTML = gamesOut.map(({g,info})=>{
+    const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
+    const win = info.winner?info.winner.toUpperCase():null;
+    const teamSpan=(t)=>{
+      const cls = win ? (t===win?"won":"lost") : "";
+      return `<span class="${cls}">${t}</span>`;
+    };
+    const stCls = info.state==="post"?"s-post":(info.state==="in"?"s-in":"s-pre");
+    const stTxt = info.state==="post"?"FINAL":(info.state==="in"?"LIVE":"—");
+    const sc = (info.scores&&Object.keys(info.scores).length)
+      ? `<span class="score">${A} ${info.scores[A]||0} – ${B} ${info.scores[B]||0}</span>` : "";
+    const pks = PICKS.players.map(p=>{
+      const pick=(g.picks[p]||"").toUpperCase();
+      let c="";
+      if(win) c = (pick===win)?" correct":" wrong";
+      return `<span class="pk${c}"><span class="who">${p}:</span> <span class="pick">${pick||"—"}</span></span>`;
+    }).join("");
+    return `<div class="game">
+      <div class="ghead">
+        <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}</span>
+        <span class="gstatus ${stCls}">${stTxt}</span>
+      </div>
+      ${sc?`<div style="margin-bottom:8px">${sc} <span class="score" style="color:var(--mut)">${info.detail||""}</span></div>`:""}
+      <div class="picks">${pks}</div>
+    </div>`;
+  }).join("");
+
+  document.getElementById("subhead").textContent =
+    `Week ${PICKS.week} · ${PICKS.season} · ${PICKS.players.length} players`;
+}
+
+async function tick(){
+  const rf = document.getElementById("refresh");
+  const eb = document.getElementById("errbox");
+  try{
+    const data = await fetchScores();
+    lastGood = data; eb.innerHTML="";
+    render(data);
+    rf.innerHTML = `<span class="dot"></span>Live — updated ${new Date().toLocaleTimeString()} · auto-refresh every 30s`;
+  }catch(e){
+    // Don't blank the page on a transient failure — keep last good render.
+    if(lastGood){ render(lastGood); }
+    else { render(null); }   // still show picks + leaderboard (0 wins) even with no scores yet
+    eb.innerHTML = `<div class="err">Couldn't reach the live-score feed just now (${e.message}). Showing picks; scores will fill in on the next refresh. If this persists, ESPN may be briefly unavailable.</div>`;
+    rf.innerHTML = `retrying every 30s…`;
+  }
+}
+
+// boot
+if(typeof PICKS==="undefined"){
+  document.getElementById("errbox").innerHTML =
+    `<div class="err">picks.js didn't load. Make sure picks.js is in the same folder as index.html.</div>`;
+} else {
+  render(null);   // instant paint: picks + leaderboard show immediately, before scores arrive
+  tick();
+  setInterval(tick, POLL_MS);
+}
+</script>
+</body>
+</html>
