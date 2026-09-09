@@ -33,7 +33,6 @@
   .lb{display:flex;flex-direction:column;gap:8px}
   .lbrow{display:grid;grid-template-columns:26px 52px 1fr auto auto;gap:12px;align-items:center;
          padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:11px}
-  .lbrow.me{border-color:var(--blu)}
   .lbrow.lead{border-color:var(--gold);background:rgba(255,207,63,.07)}
   .lbrow .rk{font-weight:800;color:var(--mut);text-align:center}
   .lbrow .nm{font-weight:800;font-size:16px}
@@ -108,7 +107,6 @@
     padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:11px}
   .ptw-row.lead{border-color:var(--gold);background:rgba(255,207,63,.06)}
   .ptw-row.clinched{border-color:var(--gold);background:rgba(255,207,63,.1)}
-  .ptw-row.me{box-shadow:inset 3px 0 0 var(--blu)}
   .ptw-row.elim{opacity:.5}
   .ptw-row .avatar,.ptw-row .avatar-fb{width:44px;height:44px;flex-basis:44px;font-size:16px}
   .ptw-rk{font-weight:800;color:var(--mut);text-align:center;font-variant-numeric:tabular-nums}
@@ -148,7 +146,6 @@
   .rooter.big{background:rgba(255,210,63,.14);border-color:var(--yel);color:var(--yel)}
   .rooter.minor{color:var(--mut)}
   .rooter.dead{opacity:.45;text-decoration:line-through}
-  .rooter.me{box-shadow:inset 0 0 0 1px var(--blu)}
   .ptw-sub-h{font-size:12px;color:var(--mut);font-weight:800;text-transform:uppercase;
     letter-spacing:.05em;margin:6px 0 10px}
   /* needed-games narrative (main content) */
@@ -683,7 +680,7 @@ function pathNeedsText(r, ctx){
 
   // All remaining picked games are required -> must win them all.
   if(req.length && help.length===0){
-    if(req.length===1) return head + `NEEDS: ${chip(req[0])} — win it and you take the week.`;
+    if(req.length===1) return head + `NEEDS: ${chip(req[0])} — win it and takes the week.`;
     return head + `NEEDS ALL: ` + req.map(chip).join(" + ") + ` — every one must hit.`;
   }
   // Some required + some helpful.
@@ -713,11 +710,10 @@ const INTEN = {
 };
 function rooterChip(r){
   const t = INTEN[r.tag] || INTEN.minor;
-  const me = r.name==="Nick" ? " me" : "";
   const title = r.tag==="must" ? "Must-win — eliminated if this goes the other way"
     : r.tag==="big" ? "Big swing to their week"
     : r.tag==="dead" ? "Already eliminated" : "Helps, but not critical";
-  return `<span class="rooter ${t.cls}${me}" title="${title}">${t.emoji} ${r.name}</span>`;
+  return `<span class="rooter ${t.cls}" title="${title}">${t.emoji} ${r.name}</span>`;
 }
 
 function renderPathToWin(gamesOut){
@@ -740,7 +736,7 @@ function renderPathToWin(gamesOut){
     const how = tiedTop.length>1 ? `via tiebreaker (closest to ${ctx.tbActual})` : `outright`;
     const banner = `<div class="ptw-banner win">🏆 ${ctx.results[0].name} wins the week — ${how}. (${top} correct)</div>`;
     el.innerHTML = banner + `<div class="ptw-list">` + ctx.results.map((r,i)=>{
-      const cls = "ptw-row"+(i===0?" clinched":" elim")+(r.name==="Nick"?" me":"");
+      const cls = "ptw-row"+(i===0?" clinched":" elim");
       return `<div class="${cls}"><span class="ptw-rk">${i===0?'🏆':i+1}</span><span>${avatar(r.name)}</span>`
         +`<span class="ptw-mid"><span class="ptw-name">${r.name}</span><span class="ptw-need">${r.correct} correct</span></span></div>`;
     }).join("") + `</div>`;
@@ -763,7 +759,7 @@ function renderPathToWin(gamesOut){
   const pathList = ctx.results.map((r,i)=>{
     let cls = "ptw-row";
     if(r.clinched) cls+=" clinched"; else if(r.eliminated) cls+=" elim"; else if(i===0) cls+=" lead";
-    if(r.name==="Nick") cls+=" me";
+    // shared pool site: no special "you" player — all 6 render identically
     // OPTIONAL tiny % (secondary, clearly labeled estimate) — only when we have a real prob source.
     let like = "";
     if(!r.eliminated && r.winPct!=null && ctx.hasProbSource){
@@ -791,7 +787,7 @@ function renderPathToWin(gamesOut){
     const kick = (s.info && s.info.state==="pre") ? fmtCT(s.info.date) : (live?"LIVE":"");
     const decideTag = s.split
       ? `<span class="tag split">DECIDING ${s.aliveA}–${s.aliveB}</span>`
-      : `<span class="tag consensus">${(s.aliveA+s.aliveB)>0?'lean':'no contenders'}</span>`;
+      : `<span class="tag consensus" title="Everyone (or all remaining contenders) picked the same team — won't separate the standings">${(s.aliveA+s.aliveB)>0?'CONSENSUS':'no contenders'}</span>`;
     const sideBlock = (abbr, rooters, prob)=>{
       const chips = rooters.length ? rooters.map(rooterChip).join(" ") : `<span class="muted" style="font-size:12px">nobody</span>`;
       const pTxt = (prob!=null) ? `<span class="rside-p">~${prob}%</span>` : "";
@@ -925,8 +921,8 @@ function renderArchivedWeek(wk){
   const lb = document.getElementById("leaderboard");
   lb.innerHTML = rows.map((r,i)=>{
     const leading = r.wins===topWins && topWins>0;
-    const isMe = r.name==="Nick";
-    const cls = "lbrow"+(leading?" lead":(isMe?" me":""));
+    // shared pool site: no special "you" player — every row styled identically (leader gets 👑 only)
+    const cls = "lbrow"+(leading?" lead":"");
     const rec = r.played>0 ? `${r.wins}-${r.played-r.wins}` : "—";
     return `<div class="${cls}"><span class="rk">${i+1}</span><span>${avatar(r.name)}</span>`
       +`<span class="nm">${leading?'<span class="crown">👑</span> ':''}${r.name}</span>`
@@ -1017,8 +1013,8 @@ function render(data){
   const lb = document.getElementById("leaderboard");
   lb.innerHTML = rows.map((r,i)=>{
     const leading = r.wins===topWins && topWins>0;
-    const isMe = r.name==="Nick";
-    const cls = "lbrow"+(leading?" lead":(isMe?" me":""));
+    // shared pool site: no special "you" player — every row styled identically (leader gets 👑 only)
+    const cls = "lbrow"+(leading?" lead":"");
     const rec = r.played>0 ? `${r.wins}-${r.played-r.wins}` : "—";
     return `<div class="${cls}">
       <span class="rk">${i+1}</span>
