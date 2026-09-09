@@ -99,6 +99,34 @@
   .dg .tag.consensus{background:#0d131c;color:var(--mut);border:1px solid var(--line)}
   .dg .split-detail{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
 
+  /* ---- PATH TO WIN ---- */
+  .ptw-banner{font-size:13px;color:var(--ink);background:var(--bg);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;margin-bottom:12px;line-height:1.5}
+  .ptw-banner.win{background:rgba(255,207,63,.1);border-color:var(--gold);font-weight:800;font-size:15px}
+  .ptw-list{display:flex;flex-direction:column;gap:8px}
+  .ptw-row{display:grid;grid-template-columns:22px 44px 1fr auto;gap:11px;align-items:center;
+    padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:11px}
+  .ptw-row.lead{border-color:var(--gold);background:rgba(255,207,63,.06)}
+  .ptw-row.clinched{border-color:var(--gold);background:rgba(255,207,63,.1)}
+  .ptw-row.me{box-shadow:inset 3px 0 0 var(--blu)}
+  .ptw-row.elim{opacity:.5}
+  .ptw-row .avatar,.ptw-row .avatar-fb{width:44px;height:44px;flex-basis:44px;font-size:16px}
+  .ptw-rk{font-weight:800;color:var(--mut);text-align:center;font-variant-numeric:tabular-nums}
+  .ptw-mid{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .ptw-name{font-weight:800;font-size:16px}
+  .ptw-need{font-size:12px;color:var(--mut);line-height:1.35}
+  .ptw-need.clinch{color:var(--gold);font-weight:700}
+  .ptw-need.elim{color:var(--red);opacity:.85}
+  .ptw-pct{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--blu);
+    min-width:56px;text-align:right}
+  .ptw-pct.win{color:var(--gold)}
+  .ptw-swing-h{font-size:12px;color:var(--mut);font-weight:800;text-transform:uppercase;
+    letter-spacing:.05em;margin:16px 0 8px}
+  .ptw-swing{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;
+    background:var(--bg);border:1px solid var(--yel);border-radius:10px;margin-bottom:8px}
+  .ptw-swing .mu{display:flex;align-items:center;gap:6px;font-weight:800;font-size:14px}
+  .ptw-swing-p{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+
   /* ---- DESKTOP: use the wider screen; mobile layout above is unchanged ---- */
   @media (min-width:820px){
     .wrap{max-width:1080px;padding:22px}
@@ -139,6 +167,11 @@
   <div class="weeklbl" id="weeklbl"></div>
 
   <div class="card">
+    <h2>🧭 Path to Win <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— what each player needs + chance to win the week</span></h2>
+    <div id="pathtowin"></div>
+  </div>
+
+  <div class="card">
     <h2>🏆 Leaderboard</h2>
     <div class="lb" id="leaderboard"></div>
     <div class="tiebreak" id="tiebreak"></div>
@@ -147,13 +180,7 @@
   <div class="refresh" id="refresh"></div>
 
   <div class="card">
-    <h2>🔀 Deciding Games <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— where the group is split</span></h2>
-    <p class="note" style="text-align:left;margin:0 0 10px">Split games decide the standings; consensus games (everyone agrees) won't move the leaderboard.</p>
-    <div id="deciding"></div>
-  </div>
-
-  <div class="card">
-    <h2>Games &amp; Picks</h2>
+    <h2>Games &amp; Picks <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— who picked what</span></h2>
     <div class="games" id="games"></div>
   </div>
 
@@ -281,14 +308,311 @@ function indexGames(data){
     let winner = null;
     if(st.completed){ winner = (t1.winner? a1 : (t2.winner? a2 : null)); }
     const s1 = parseInt(t1.score||0,10), s2 = parseInt(t2.score||0,10);
+    const state = st.state || "pre";
+    // ---- win probability (per team abbr, 0..1) + which source we used (honest labeling) ----
+    // Priority: (1) ESPN live win% while in-progress, (2) pregame odds spread -> logistic,
+    // (3) in-progress score+time heuristic, (4) 50/50 not-started. probSource is null if none.
+    const A = a1.toUpperCase(), B = a2.toUpperCase();
+    let winProb = null, probSource = null;
+    // (1) ESPN live win probability (only present on some in-progress feeds)
+    const espnP = c.situation && c.situation.lastPlay && c.situation.lastPlay.probability;
+    if(state === "in" && espnP && espnP.homeWinPercentage != null){
+      // homeAway tells us which competitor is home
+      const homeAbbr = (t1.homeAway === "home" ? A : B);
+      const awayAbbr = (homeAbbr === A ? B : A);
+      const hp = Math.max(0, Math.min(1, espnP.homeWinPercentage));
+      winProb = { [homeAbbr]: hp, [awayAbbr]: 1 - hp };
+      probSource = "espn-live";
+    }
+    // (2) pregame odds: spread + which side favored (details string carries the fav abbr)
+    if(!winProb){
+      const od = (c.odds && c.odds[0]) ? c.odds[0] : null;
+      const sp = od && (od.spread != null) ? Math.abs(Number(od.spread)) : null;
+      let favAbbr = null;
+      if(od){
+        if(od.homeTeamOdds && od.homeTeamOdds.favorite) favAbbr = (t1.homeAway === "home" ? A : B);
+        else if(od.awayTeamOdds && od.awayTeamOdds.favorite) favAbbr = (t1.homeAway === "home" ? B : A);
+        else if(od.details){ // e.g. "SEA -3" -> favored team abbr is the token before the number
+          const mm = String(od.details).match(/([A-Z]{2,4})\s*-?\d/);
+          if(mm && (mm[1]===A || mm[1]===B)) favAbbr = mm[1];
+        }
+      }
+      if(sp != null && favAbbr){
+        // NFL spread -> win prob (logistic fit; ~ -3 => 60%, -7 => 71%, -10 => 78%). Cap 50..92%.
+        const p = 1 / (1 + Math.exp(-0.14 * sp));
+        const pf = Math.max(0.5, Math.min(0.92, p));
+        const dogAbbr = favAbbr === A ? B : A;
+        winProb = { [favAbbr]: pf, [dogAbbr]: 1 - pf };
+        probSource = "odds-spread";
+      }
+    }
+    // (3) in-progress fallback from score margin + time when no prob source above
+    if(!winProb && state === "in"){
+      const lead = s1 - s2;                          // A minus B
+      // crude: each point of lead ~ +3% toward the leader, centered at 50%
+      let pA = 0.5 + Math.max(-0.42, Math.min(0.42, lead * 0.03));
+      winProb = { [A]: pA, [B]: 1 - pA };
+      probSource = "live-score";
+    }
+    // (4) not-started, no odds -> even
+    if(!winProb){
+      winProb = { [A]: 0.5, [B]: 0.5 };
+      probSource = "even";
+    }
     m[mkey(a1,a2)] = {
-      state: st.state||"pre", completed: !!st.completed, detail: st.shortDetail||"",
+      state, completed: !!st.completed, detail: st.shortDetail||"",
       date: ev.date || (c && c.date) || null,
       winner, total: s1+s2,
-      scores: { [a1.toUpperCase()]: s1, [a2.toUpperCase()]: s2 }
+      scores: { [A]: s1, [B]: s2 },
+      winProb, probSource
     };
   });
   return m;
+}
+
+// ============================================================================
+// PATH TO WIN — for each player: current correct count, what they NEED in the
+// remaining undecided games, tiebreaker-aware tie resolution, elimination, and a
+// labeled likelihood ESTIMATE from per-game win probabilities. Pure/display-only.
+//   gamesOut: [{g, info}]  (info carries completed, winner, winProb, probSource)
+//   players:  PICKS.players
+//   tbPreds:  { player: predictedTotal }   tbActual: number|null (DEN/KC final total)
+// Returns { state, players:[{...}], swing:[...], hasProbSource, tbResolved }
+// ============================================================================
+function computePathToWin(gamesOut, players, tbPreds, tbActual){
+  // classify games
+  const finals = [], undecided = [];
+  gamesOut.forEach(o=>{
+    if(o.info && o.info.completed && o.info.winner) finals.push(o);
+    else undecided.push(o);
+  });
+
+  // current correct (from finals only)
+  const correct = {}; players.forEach(p=>correct[p]=0);
+  finals.forEach(({g,info})=>{
+    const w = info.winner.toUpperCase();
+    players.forEach(p=>{ if((g.picks[p]||"").toUpperCase()===w) correct[p]++; });
+  });
+
+  // remaining games each player has a LIVE pick in (their picked team still undecided)
+  const liveUndecided = undecided.filter(o=>{
+    // a game "counts" for a player only if they picked one of the two teams
+    return players.some(p=>{ const pk=(o.g.picks[p]||"").toUpperCase(); return pk===o.g.team1.toUpperCase()||pk===o.g.team2.toUpperCase(); });
+  });
+  const remainingFor = {}; players.forEach(p=>{
+    remainingFor[p] = undecided.filter(o=>{ const pk=(o.g.picks[p]||"").toUpperCase(); return pk===o.g.team1.toUpperCase()||pk===o.g.team2.toUpperCase(); }).length;
+  });
+  const maxPossible = {}; players.forEach(p=> maxPossible[p]=correct[p]+remainingFor[p]);
+
+  // tiebreaker rank helper: among a set of tied-on-wins players, lower |pred-actual| wins.
+  // If tbActual is null (that game not final), ties are UNRESOLVED (return null winner).
+  function tbWinner(names){
+    if(names.length===1) return names[0];
+    if(tbActual==null) return null;                 // can't resolve yet
+    let best=null, bestDiff=Infinity;
+    names.forEach(n=>{ const pred=tbPreds&&tbPreds[n]!=null?tbPreds[n]:null;
+      const d = pred!=null?Math.abs(pred-tbActual):Infinity;
+      if(d<bestDiff){ bestDiff=d; best=n; } });
+    return best;
+  }
+
+  // ---- likelihood via exact enumeration over undecided games (2^k) when feasible ----
+  // Each undecided game contributes a probability that a given side wins; we enumerate
+  // all outcome combinations, weight by product of chosen-side probs, and tally who wins.
+  const k = undecided.length;
+  const anyProb = undecided.some(o=>o.info && o.info.probSource && o.info.probSource!=="even")
+    || finals.length>0;   // if games are final we can still show NEEDS; prob source flagged below
+  const hasProbSource = undecided.some(o=>o.info && o.info.probSource && o.info.probSource!=="even");
+
+  const winShare = {}; players.forEach(p=>winShare[p]=0);
+  let enumerated = false;
+  if(k>0 && k<=18){
+    enumerated = true;
+    // precompute per-undecided-game: [teamAbbrWinner, probThatWinner] for each of 2 sides
+    const sides = undecided.map(o=>{
+      const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
+      const wp = (o.info && o.info.winProb) ? o.info.winProb : {[A]:0.5,[B]:0.5};
+      return { A, B, pA: (wp[A]!=null?wp[A]:0.5) };
+    });
+    const total = 1<<k;
+    for(let mask=0; mask<total; mask++){
+      let prob = 1;
+      const wins = {}; players.forEach(p=>wins[p]=correct[p]);
+      for(let i=0;i<k;i++){
+        const winnerIsA = !!(mask & (1<<i));
+        const s = sides[i];
+        prob *= winnerIsA ? s.pA : (1-s.pA);
+        const w = winnerIsA ? s.A : s.B;
+        players.forEach(p=>{ if((undecided[i].g.picks[p]||"").toUpperCase()===w) wins[p]++; });
+      }
+      // who wins this scenario? highest wins, tie-break by TB (if resolvable)
+      let top=-1; players.forEach(p=>{ if(wins[p]>top) top=wins[p]; });
+      const tied = players.filter(p=>wins[p]===top);
+      const champ = tbWinner(tied);
+      if(champ){ winShare[champ] += prob; }
+      else {
+        // TB unresolved -> split the scenario's credit evenly among the tied (honest: unknown)
+        tied.forEach(t=> winShare[t] += prob/tied.length);
+      }
+    }
+  }
+
+  // ---- per-player NEEDS text + clinch/eliminated flags ----
+  // Determine the current leader-on-the-board (by correct now, TB-aware) for "can't catch" msgs.
+  const curTop = Math.max(0, ...players.map(p=>correct[p]));
+  // A player is ELIMINATED if even winning all their remaining live games can't reach the
+  // best-case of the field leader's floor. Precise check: max X <  (someone else's guaranteed
+  // min that also beats X on TB). Simpler robust rule: eliminated if maxPossible[X] < the
+  // highest *current* correct among players whose remaining can only add (i.e. can't be caught).
+  // We use: eliminated if maxPossible[X] < curTop AND (maxPossible[X] < curTop) — i.e. can't
+  // even tie the current top count. (Conservative; a player who can only tie stays "alive-tie".)
+  const results = players.map(p=>{
+    const cur = correct[p], rem = remainingFor[p], mx = maxPossible[p];
+    // opponents' best case to gauge whether winning-out is enough
+    const oppMax = Math.max(0, ...players.filter(q=>q!==p).map(q=>maxPossible[q]));
+    const oppCurTop = Math.max(0, ...players.filter(q=>q!==p).map(q=>correct[q]));
+    const eliminated = mx < oppCurTop;               // can't even reach a rival's locked-in count
+    const clinched = cur > oppMax;                   // already more than anyone else can reach
+    return {
+      name:p, correct:cur, remaining:rem, maxPossible:mx,
+      eliminated, clinched,
+      winPct: enumerated ? winShare[p] : null,
+      tbPred: (tbPreds&&tbPreds[p]!=null)?tbPreds[p]:null
+    };
+  });
+
+  // rank: clinched first, then by winPct desc (if available) else correct desc, eliminated last
+  results.sort((a,b)=>{
+    if(a.eliminated!==b.eliminated) return a.eliminated?1:-1;
+    if(a.clinched!==b.clinched) return a.clinched?-1:1;
+    if(a.winPct!=null && b.winPct!=null && b.winPct!==a.winPct) return b.winPct-a.winPct;
+    if(b.correct!==a.correct) return b.correct-a.correct;
+    return b.maxPossible-a.maxPossible;
+  });
+
+  // ---- KEY SWING GAMES: undecided games where contenders are split (need opposite results) ----
+  // Score each undecided game by how much it separates the live contenders (non-eliminated).
+  const alive = new Set(results.filter(r=>!r.eliminated).map(r=>r.name));
+  const swing = undecided.map(o=>{
+    const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
+    let aCount=0,bCount=0;
+    players.forEach(p=>{ if(!alive.has(p)) return; const pk=(o.g.picks[p]||"").toUpperCase();
+      if(pk===A)aCount++; else if(pk===B)bCount++; });
+    const split = aCount>0 && bCount>0;
+    const minority = split ? Math.min(aCount,bCount) : 0;
+    return { A, B, aCount, bCount, split, minority, info:o.info };
+  }).filter(s=>s.split)
+    .sort((x,y)=> (y.minority-x.minority) || ((y.aCount+y.bCount)-(x.aCount+x.bCount)));
+
+  // week state
+  let state = "mid";
+  if(finals.length===0 && undecided.length>0) state = "notstarted";
+  else if(undecided.length===0) state = "final";
+
+  return {
+    state, results, swing, hasProbSource,
+    tbResolved: tbActual!=null, tbActual,
+    finalsCount: finals.length, totalGames: gamesOut.length
+  };
+}
+
+// Build the human "needs" line for a player given the computed context.
+function pathNeedsText(r, ctx){
+  if(ctx.state==="final"){
+    return r.correct + " correct";
+  }
+  if(r.clinched) return `CLINCHED — ${r.correct} correct, can't be caught`;
+  if(r.eliminated) return `eliminated — ${r.correct} correct, can't catch the leader`;
+  const parts = [`${r.correct} correct`];
+  if(r.remaining>0) parts.push(`${r.remaining} of their picks still live (max ${r.maxPossible})`);
+  else parts.push(`no live picks left`);
+  return parts.join(" · ");
+}
+
+// Render the PATH TO WIN card. Honest per week-state; likelihood clearly labeled ESTIMATE.
+function renderPathToWin(gamesOut){
+  const el = document.getElementById("pathtowin"); if(!el) return;
+  const players = PICKS.players;
+  const tbPreds = PICKS.tiebreaker || {};
+  // tbActual: DEN/KC combined total if that game is final
+  let tbActual = null;
+  const tbg = PICKS.tiebreakerGame;
+  if(tbg){
+    const tbInfo = gamesOut.find(o=> mkey(o.g.team1,o.g.team2)===mkey(tbg.team1,tbg.team2));
+    if(tbInfo && tbInfo.info && tbInfo.info.completed) tbActual = tbInfo.info.total;
+  }
+  const ctx = computePathToWin(gamesOut, players, tbPreds, tbActual);
+
+  // ---- state: not started ----
+  if(ctx.state==="notstarted"){
+    el.innerHTML = `<div class="ptw-banner">🟢 Week not started — ${ctx.totalGames} games, all ${players.length} alive.</div>
+      <div class="note" style="text-align:left">Paths + live win chances appear here as games go final. No scenario math until the first result is in.</div>`;
+    return;
+  }
+
+  const pct = v => (v==null?null:Math.round(v*100));
+  const rows = ctx.results.map((r,i)=>{
+    const rank = i+1;
+    let cls = "ptw-row";
+    if(r.clinched) cls+=" clinched";
+    else if(r.eliminated) cls+=" elim";
+    else if(rank===1) cls+=" lead";
+    const isMe = r.name==="Nick";
+    if(isMe) cls+=" me";
+    // likelihood chip (labeled ESTIMATE; only when we enumerated with a real prob source)
+    let like = "";
+    if(!r.eliminated && r.winPct!=null && ctx.hasProbSource){
+      const p = pct(r.winPct);
+      const shown = p<1 && r.winPct>0 ? "<1" : (p>99 && r.winPct<1 ? ">99" : p);
+      like = `<span class="ptw-pct" title="Rough estimate from betting-line win probabilities of the remaining games">~${shown}%</span>`;
+    } else if(r.clinched){
+      like = `<span class="ptw-pct win">100%</span>`;
+    }
+    const needs = pathNeedsText(r, ctx);
+    const needCls = r.clinched?"clinch":(r.eliminated?"elim":"");
+    return `<div class="${cls}">
+      <span class="ptw-rk">${r.eliminated?'—':rank}</span>
+      <span>${avatar(r.name)}</span>
+      <span class="ptw-mid">
+        <span class="ptw-name">${r.clinched?'👑 ':''}${r.name}</span>
+        <span class="ptw-need ${needCls}">${needs}</span>
+      </span>
+      ${like}
+    </div>`;
+  }).join("");
+
+  // header banner by state
+  let banner = "";
+  if(ctx.state==="final"){
+    const champ = ctx.results.find(r=>r.clinched) || ctx.results[0];
+    // decide outright vs tiebreaker: was there a tie on correct at the top?
+    const top = ctx.results[0].correct;
+    const tiedTop = ctx.results.filter(r=>r.correct===top);
+    const how = tiedTop.length>1 ? `via tiebreaker (closest to ${ctx.tbActual})` : `outright`;
+    banner = `<div class="ptw-banner win">🏆 ${ctx.results[0].name} wins the week — ${how}. (${top} correct)</div>`;
+  } else {
+    const est = ctx.hasProbSource
+      ? `Win chances are a rough <b>ESTIMATE</b> from betting-line win probabilities of the remaining games.`
+      : `No live win-probability source right now — showing <b>NEEDS only</b> (no percentages).`;
+    banner = `<div class="ptw-banner">${ctx.finalsCount} of ${ctx.totalGames} final · live paths below. <span class="muted" style="font-weight:400">${est}</span></div>`;
+  }
+
+  // key swing games (fold in — the specific undecided games contenders split on)
+  let swingHtml = "";
+  if(ctx.state!=="final" && ctx.swing.length){
+    swingHtml = `<div class="ptw-swing-h">🔑 Key swing games <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">— contenders need these to go opposite ways</span></div>`
+      + ctx.swing.slice(0,5).map(s=>{
+        const wp = s.info && s.info.winProb ? s.info.winProb : null;
+        const pa = wp ? Math.round((wp[s.A]!=null?wp[s.A]:0.5)*100) : null;
+        const probTxt = (pa!=null && ctx.hasProbSource) ? `<span class="ptw-swing-p">${s.A} ~${pa}% · ${s.B} ~${100-pa}%</span>` : "";
+        return `<div class="ptw-swing">
+          <span class="mu">${teamChip(s.A)} <span class="muted" style="font-weight:400">vs</span> ${teamChip(s.B)}</span>
+          <span style="display:flex;align-items:center;gap:8px">${probTxt}<span class="tag split">SPLIT ${s.aCount}–${s.bCount}</span></span>
+        </div>`;
+      }).join("");
+  }
+
+  el.innerHTML = banner + `<div class="ptw-list">${rows}</div>` + swingHtml;
 }
 
 // Flag which games the group is SPLIT on (differentiators) vs consensus (won't move standings).
@@ -414,8 +738,9 @@ function renderArchivedWeek(wk){
     tb.innerHTML = `<b>Tiebreaker</b>: ` + players.map(p=>`${p} ${tbPreds[p]!=null?tbPreds[p]:'?'}`).join(" · ");
   }
 
-  // deciding games + games list reuse the shared renderers
-  renderDeciding(gamesOut);
+  // path to win (headline) + games list reuse the shared renderers
+  renderPathToWin(gamesOut);
+  renderDeciding(gamesOut);   // no-op unless a #deciding element exists (kept for compatibility)
 
   const gel = document.getElementById("games");
   gel.innerHTML = gamesOut.map(({g,info})=>{
@@ -511,8 +836,9 @@ function render(data){
       PICKS.players.map(p=>`${p} ${PICKS.tiebreaker?PICKS.tiebreaker[p]:'?'}`).join(" · ");
   }
 
-  // ---- deciding games (disagreement finder) ----
-  renderDeciding(gamesOut);
+  // ---- path to win (headline: needs + likelihood + key swing games) ----
+  renderPathToWin(gamesOut);
+  renderDeciding(gamesOut);   // no-op unless a #deciding element exists (kept for compatibility)
 
   // ---- games list ----
   const gel = document.getElementById("games");
