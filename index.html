@@ -151,6 +151,17 @@
   .rooter.me{box-shadow:inset 0 0 0 1px var(--blu)}
   .ptw-sub-h{font-size:12px;color:var(--mut);font-weight:800;text-transform:uppercase;
     letter-spacing:.05em;margin:6px 0 10px}
+  /* needed-games narrative (main content) */
+  .ptw-need{font-size:13px;line-height:1.6;color:var(--ink);display:block;white-space:normal}
+  .pn-need-g{display:inline-flex;align-items:center;gap:3px;background:#0d131c;border:1px solid var(--line);
+    border-radius:8px;padding:2px 7px;margin:2px 2px 2px 0;font-weight:700;font-size:12.5px;white-space:nowrap}
+  .pn-need-g .logo{width:18px;height:18px}
+  .pn-clinch{color:var(--gold)} .pn-elim{color:var(--red)}
+  .ptw-pct{display:flex;flex-direction:column;align-items:flex-end;line-height:1.05}
+  .ptw-pct-lbl{font-size:8px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+  /* let the per-player row grow to fit the needed-games list */
+  .ptw-row{align-items:flex-start}
+  .ptw-row .ptw-rk,.ptw-row .avatar,.ptw-row .avatar-fb{margin-top:2px}
   @media (min-width:820px){
     .ptwg-list{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   }
@@ -468,18 +479,32 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
       return { A, B, pA: (wp[A]!=null?wp[A]:0.5) };
     });
     for(let i=0;i<k;i++){ condA[i]={}; condB[i]={}; probMassA[i]=0; players.forEach(p=>{condA[i][p]=0;condB[i][p]=0;}); }
+    // exact needed-games tracking (count scenarios, prob-independent, so ties/needs are certain):
+    //   winCnt[p]                = # of outcome-combos where p wins the week
+    //   winWhenPickHit[i][p]     = # of p's winning combos where p's pick in game i WON
+    //   winWhenPickMiss[i][p]    = # of p's winning combos where p's pick in game i LOST (or p had no pick)
+    // If winCnt>0 and winWhenPickMiss[i][p]===0 (and p picked game i) => game i is REQUIRED for p.
+    const winCnt = {}; players.forEach(p=>winCnt[p]=0);
+    const winPickHit = [], winPickMiss = [];
+    for(let i=0;i<k;i++){ winPickHit[i]={}; winPickMiss[i]={}; players.forEach(p=>{winPickHit[i][p]=0;winPickMiss[i][p]=0;}); }
     const total = 1<<k;
     for(let mask=0; mask<total; mask++){
       let prob = 1;
       const wins = {}; players.forEach(p=>wins[p]=correct[p]);
       const aWon = [];
+      // track, per player, whether each of their picked undecided games hit this scenario
+      const pickHit = players.map(()=>[]); // index by player order
       for(let i=0;i<k;i++){
         const winnerIsA = !!(mask & (1<<i));
         aWon[i] = winnerIsA;
         const s = sides[i];
         prob *= winnerIsA ? s.pA : (1-s.pA);
         const w = winnerIsA ? s.A : s.B;
-        players.forEach(p=>{ if((undecided[i].g.picks[p]||"").toUpperCase()===w) wins[p]++; });
+        players.forEach((p,pi)=>{
+          const pk=(undecided[i].g.picks[p]||"").toUpperCase();
+          if(pk===s.A||pk===s.B){ const hit = (pk===w); if(hit) wins[p]++; pickHit[pi][i]=hit?1:0; }
+          else pickHit[pi][i]=-1; // no pick in this game
+        });
       }
       // who wins this scenario? highest wins, tie-break by TB (if resolvable)
       let top=-1; players.forEach(p=>{ if(wins[p]>top) top=wins[p]; });
@@ -490,6 +515,13 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
       if(champ){ credit[champ] = prob; }
       else { tied.forEach(t=> credit[t] = (credit[t]||0) + prob/tied.length); }
       players.forEach(p=>{ winShare[p] += (credit[p]||0); });
+      // exact win-scenario counting (a player "wins" a combo if sole champ, OR co-champ with TB unresolved)
+      const soleWinners = champ ? [champ] : tied;   // if TB resolvable, single champ; else all tied count as possible
+      soleWinners.forEach(p=>{
+        winCnt[p]++;
+        const pi = players.indexOf(p);
+        for(let i=0;i<k;i++){ const h=pickHit[pi][i]; if(h===1) winPickHit[i][p]++; else if(h===0) winPickMiss[i][p]++; }
+      });
       // accumulate per-game conditional credit + side-A probability mass
       for(let i=0;i<k;i++){
         if(aWon[i]) probMassA[i] += prob;
@@ -497,6 +529,10 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
         players.forEach(p=>{ if(credit[p]) bucket[p] += credit[p]; });
       }
     }
+    // expose for needed-games derivation
+    computePathToWin._winCnt = winCnt;
+    computePathToWin._winPickHit = winPickHit;
+    computePathToWin._winPickMiss = winPickMiss;
   }
 
   // ---- per-player NEEDS text + clinch/eliminated flags ----
@@ -508,6 +544,9 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   // highest *current* correct among players whose remaining can only add (i.e. can't be caught).
   // We use: eliminated if maxPossible[X] < curTop AND (maxPossible[X] < curTop) — i.e. can't
   // even tie the current top count. (Conservative; a player who can only tie stays "alive-tie".)
+  const WC = computePathToWin._winCnt || {};
+  const WHIT = computePathToWin._winPickHit || [];
+  const WMISS = computePathToWin._winPickMiss || [];
   const results = players.map(p=>{
     const cur = correct[p], rem = remainingFor[p], mx = maxPossible[p];
     // opponents' best case to gauge whether winning-out is enough
@@ -515,10 +554,36 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     const oppCurTop = Math.max(0, ...players.filter(q=>q!==p).map(q=>correct[q]));
     const eliminated = mx < oppCurTop;               // can't even reach a rival's locked-in count
     const clinched = cur > oppMax;                   // already more than anyone else can reach
+
+    // ---- SPECIFIC NEEDED GAMES/OUTCOMES (the main content) ----
+    // For each undecided game p has a pick in, does p have ANY winning combo where that pick MISSED?
+    //   no  -> that game is REQUIRED (p must have their team win it).
+    //   yes -> helpful but not strictly required.
+    // A player who wins in EVERY combo where at least one of their picks hits, but never when all
+    // miss, gets an "either of" clinch note. We surface: required[], helpful[], and a clinch hint.
+    const myGames = [];
+    if(enumerated && !eliminated){
+      for(let i=0;i<undecided.length;i++){
+        const o = undecided[i];
+        const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
+        const pk=(o.g.picks[p]||"").toUpperCase();
+        if(pk!==A && pk!==B) continue;               // no pick in this game
+        const missWins = WMISS[i] ? (WMISS[i][p]||0) : 0;   // winning combos where this pick LOST
+        const hitWins  = WHIT[i] ? (WHIT[i][p]||0) : 0;     // winning combos where this pick WON
+        const required = (WC[p]>0) && missWins===0 && hitWins>0;
+        myGames.push({ i, need:pk, other:(pk===A?B:A), required,
+          info:o.info, matchup:`${A}/${B}` });
+      }
+    }
+    const required = myGames.filter(x=>x.required);
+    const helpful  = myGames.filter(x=>!x.required);
+
     return {
       name:p, correct:cur, remaining:rem, maxPossible:mx,
       eliminated, clinched,
       winPct: enumerated ? winShare[p] : null,
+      winCnt: WC[p]||0,
+      neededAll: required, neededHelpful: helpful, pickedLiveGames: myGames,
       tbPred: (tbPreds&&tbPreds[p]!=null)?tbPreds[p]:null
     };
   });
@@ -601,16 +666,40 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
 }
 
 // Build the human "needs" line for a player given the computed context.
+// SPECIFIC needed-games narrative (the main content). Returns HTML with team chips.
+// Formats like: "NEEDS: SEA (beat NE) + KC (beat DEN)" / "Clinches if EITHER of DAL, SEA hits".
 function pathNeedsText(r, ctx){
   if(ctx.state==="final"){
-    return r.correct + " correct";
+    return `${r.correct} correct`;
   }
-  if(r.clinched) return `CLINCHED — ${r.correct} correct, can't be caught`;
-  if(r.eliminated) return `eliminated — ${r.correct} correct, can't catch the leader`;
-  const parts = [`${r.correct} correct`];
-  if(r.remaining>0) parts.push(`${r.remaining} of their picks still live (max ${r.maxPossible})`);
-  else parts.push(`no live picks left`);
-  return parts.join(" · ");
+  if(r.clinched) return `<b class="pn-clinch">CLINCHED</b> — ${r.correct} correct, can't be caught`;
+  if(r.eliminated) return `<b class="pn-elim">ELIMINATED</b> — ${r.correct} correct, can't catch the leader even winning out`;
+
+  // needed-game chip: "TEAM (beat OTHER)"
+  const chip = x => `<span class="pn-need-g">${teamChip(x.need)} <b>${x.need}</b> <span class="muted">(beat ${x.other})</span></span>`;
+  const req = r.neededAll || [];
+  const help = r.neededHelpful || [];
+  const head = `<b>${r.correct} correct.</b> `;
+
+  // All remaining picked games are required -> must win them all.
+  if(req.length && help.length===0){
+    if(req.length===1) return head + `NEEDS: ${chip(req[0])} — win it and you take the week.`;
+    return head + `NEEDS ALL: ` + req.map(chip).join(" + ") + ` — every one must hit.`;
+  }
+  // Some required + some helpful.
+  if(req.length){
+    return head + `MUST HAVE: ` + req.map(chip).join(" + ")
+      + (help.length? ` · also helps: ` + help.map(x=>`${x.need}`).join(", ") : "");
+  }
+  // No single game strictly required, but player still has win paths -> "clinches if any hits" style.
+  if(help.length){
+    // if winning ANY one of the helpful games clinches (common late), say "either of"
+    const names = help.map(x=>x.need);
+    if(help.length<=3) return head + `in play — needs help: any of ` + help.map(chip).join(" · ");
+    return head + `still alive · ${r.remaining} live picks (needs several to fall right)`;
+  }
+  // no live picks left but not eliminated (waiting on tiebreaker / others)
+  return head + `no live picks left — result rides on other games / tiebreaker`;
 }
 
 // Render the PATH TO WIN card — GAME-FIRST "who's rooting for what" view (primary) + a
@@ -667,9 +756,33 @@ function renderPathToWin(gamesOut){
     : `<div class="ptw-banner">${ctx.finalsCount} of ${ctx.totalGames} final — decided games drop off; rooting + must-win update live. <span class="muted" style="font-weight:400">${est}</span></div>`;
 
   // legend
-  const legend = `<div class="ptw-legend">🔥 must-win · ⚠️ big swing · · minor · <span class="muted">sorted most-decisive first</span></div>`;
+  const legend = `<div class="ptw-legend">🔥 must-win · ⚠️ big swing · · minor · <span class="muted">games sorted most-decisive first</span></div>`;
 
-  // GAME CARDS (primary)
+  // ===== (A) PER-PLAYER PATH — THE MAIN CONTENT: specific needed games/outcomes =====
+  const pct = v => (v==null?null:Math.round(v*100));
+  const pathList = ctx.results.map((r,i)=>{
+    let cls = "ptw-row";
+    if(r.clinched) cls+=" clinched"; else if(r.eliminated) cls+=" elim"; else if(i===0) cls+=" lead";
+    if(r.name==="Nick") cls+=" me";
+    // OPTIONAL tiny % (secondary, clearly labeled estimate) — only when we have a real prob source.
+    let like = "";
+    if(!r.eliminated && r.winPct!=null && ctx.hasProbSource){
+      const p = pct(r.winPct);
+      const shown = p<1 && r.winPct>0 ? "<1" : (p>99 && r.winPct<1 ? ">99" : p);
+      like = `<span class="ptw-pct" title="Rough estimate only — the needed games above are what matters">~${shown}%<span class="ptw-pct-lbl">est</span></span>`;
+    } else if(r.clinched){ like = `<span class="ptw-pct win">✓</span>`; }
+    return `<div class="${cls}">
+      <span class="ptw-rk">${r.eliminated?'—':(r.clinched?'👑':i+1)}</span>
+      <span>${avatar(r.name)}</span>
+      <span class="ptw-mid">
+        <span class="ptw-name">${r.name}</span>
+        <span class="ptw-need">${pathNeedsText(r, ctx)}</span>
+      </span>
+      ${like}
+    </div>`;
+  }).join("");
+
+  // GAME CARDS (secondary — the "who's rooting" view)
   const gv = ctx.gamesView || [];
   const gameCards = gv.map(s=>{
     const wp = s.info && s.info.winProb ? s.info.winProb : null;
@@ -700,32 +813,12 @@ function renderPathToWin(gamesOut){
     </div>`;
   }).join("");
 
-  // PER-PLAYER PATH SUMMARY (secondary)
-  const pct = v => (v==null?null:Math.round(v*100));
-  const summary = ctx.results.map((r,i)=>{
-    let cls = "ptw-row";
-    if(r.clinched) cls+=" clinched"; else if(r.eliminated) cls+=" elim"; else if(i===0) cls+=" lead";
-    if(r.name==="Nick") cls+=" me";
-    let like = "";
-    if(!r.eliminated && r.winPct!=null && ctx.hasProbSource){
-      const p = pct(r.winPct);
-      const shown = p<1 && r.winPct>0 ? "<1" : (p>99 && r.winPct<1 ? ">99" : p);
-      like = `<span class="ptw-pct" title="Rough estimate from betting-line win probabilities">~${shown}%</span>`;
-    } else if(r.clinched){ like = `<span class="ptw-pct win">100%</span>`; }
-    const needCls = r.clinched?"clinch":(r.eliminated?"elim":"");
-    return `<div class="${cls}">
-      <span class="ptw-rk">${r.eliminated?'—':i+1}</span>
-      <span>${avatar(r.name)}</span>
-      <span class="ptw-mid"><span class="ptw-name">${r.clinched?'👑 ':''}${r.name}</span>
-        <span class="ptw-need ${needCls}">${pathNeedsText(r, ctx)}</span></span>
-      ${like}
-    </div>`;
-  }).join("");
-
-  el.innerHTML = banner + legend
-    + `<div class="ptwg-list">${gameCards || '<div class="note" style="text-align:left">All games decided.</div>'}</div>`
-    + `<div class="ptw-sub-h">📋 Each player's path</div>`
-    + `<div class="ptw-list">${summary}</div>`;
+  el.innerHTML = banner
+    + `<div class="ptw-sub-h">📋 Each player's path — the exact games they need</div>`
+    + `<div class="ptw-list">${pathList}</div>`
+    + `<div class="ptw-sub-h" style="margin-top:20px">🏈 Who's rooting for what</div>`
+    + legend
+    + `<div class="ptwg-list">${gameCards || '<div class="note" style="text-align:left">All games decided.</div>'}</div>`;
 }
 
 // Flag which games the group is SPLIT on (differentiators) vs consensus (won't move standings).
