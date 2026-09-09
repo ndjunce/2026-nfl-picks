@@ -6,7 +6,6 @@
 window.PICKS = {
   week: 1,
   season: 2026,
-
   players: ["Nick", "Clyde", "Chet", "Henry", "Riley", "Bobby"],
 
   games: [
