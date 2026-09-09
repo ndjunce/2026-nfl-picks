@@ -156,6 +156,16 @@
   .pn-clinch{color:var(--gold)} .pn-elim{color:var(--red)}
   .ptw-pct{display:flex;flex-direction:column;align-items:flex-end;line-height:1.05}
   .ptw-pct-lbl{font-size:8px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+  /* "games that matter to me" mini-list — the pivotal 2-3, personal per player */
+  .mm{margin-top:8px;padding:8px 10px;background:rgba(74,168,255,.06);border:1px solid var(--line);
+    border-left:3px solid var(--blu);border-radius:8px}
+  .mm-h{font-size:11px;font-weight:800;color:var(--blu);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+  .mm-row{display:flex;align-items:baseline;gap:7px;font-size:12.5px;line-height:1.5;padding:2px 0}
+  .mm-ic{width:16px;flex:0 0 16px;text-align:center}
+  .mm-g{font-weight:700;white-space:nowrap}
+  .mm-g .logo{width:16px;height:16px}
+  .mm-why{color:var(--mut);font-size:11.5px}
+  .mm-sw{color:var(--blu);font-weight:700;font-variant-numeric:tabular-nums}
   /* let the per-player row grow to fit the needed-games list */
   .ptw-row{align-items:flex-start}
   .ptw-row .ptw-rk,.ptw-row .avatar,.ptw-row .avatar-fb{margin-top:2px}
@@ -575,12 +585,57 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     const required = myGames.filter(x=>x.required);
     const helpful  = myGames.filter(x=>!x.required);
 
+    // ---- "GAMES THAT MATTER TO ME": rank this player's undecided games by how much the
+    // OUTCOME swings their own win/tie chance (reuses the conditional win-shares from the
+    // enumeration — this is a filter/rank, NOT new math). Keeps only the pivotal ~2-3. ----
+    const _tbg = (typeof PICKS!=="undefined" && PICKS.tiebreakerGame) ? PICKS.tiebreakerGame : null;
+    const tbKey = _tbg ? mkey(_tbg.team1, _tbg.team2) : null;
+    const matters = [];
+    if(enumerated && !eliminated && !clinched){
+      for(let i=0;i<undecided.length;i++){
+        const o = undecided[i];
+        const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
+        const pk=(o.g.picks[p]||"").toUpperCase();
+        const pickedA = pk===A;
+        const hasPick = pk===A || pk===B;
+        // conditional win-share of P if side A wins vs side B wins (normalize by branch mass)
+        const massA = probMassA[i], massB = 1-massA;
+        const shareA = (condA[i][p]||0), shareB = (condB[i][p]||0);
+        const pA = massA>1e-9 ? shareA/massA : 0;      // P's win-chance if A wins this game
+        const pB = massB>1e-9 ? shareB/massB : 0;      // P's win-chance if B wins this game
+        // which side helps P more? (if they have a pick it's their pick; else the better side)
+        const rootA = hasPick ? pickedA : (pA>=pB);
+        const pRoot = rootA ? pA : pB;                 // P's win-chance if their rooted side wins
+        const pAgainst = rootA ? pB : pA;              // if the other side wins
+        const swing = Math.abs(pRoot - pAgainst);      // how much this game moves P (0..1)
+        const isTb = tbKey && mkey(A,B)===tbKey;
+        // early-read proxy (pre-kickoff, when swings are tiny/uniform): pivotalness from being on
+        // the minority side of a split + the tiebreaker game. Blends in so the list isn't empty at 0-0.
+        let contA=0, contB=0;
+        players.forEach(q=>{ const qk=(o.g.picks[q]||"").toUpperCase(); if(qk===A)contA++; else if(qk===B)contB++; });
+        const split = contA>0 && contB>0;
+        const myShare = pickedA?contA:contB, oppShare = pickedA?contB:contA;
+        const minoritySide = hasPick && split && myShare<=oppShare;   // P is on the smaller side
+        const earlyScore = (split?0.1:0) + (minoritySide?0.15:0) + (isTb?0.08:0);
+        const score = swing + earlyScore*0.001 + (swing<1e-6 ? earlyScore : 0);  // real swing dominates; early proxy only when swing~0
+        matters.push({
+          i, A, B, need: hasPick ? pk : (rootA?A:B), other: hasPick ? (pickedA?B:A) : (rootA?B:A),
+          hasPick, required: required.some(x=>x.i===i), swing, score, isTb, split, minoritySide,
+          info:o.info
+        });
+      }
+    }
+    // rank by score (biggest mover first); keep only games that actually move P (or early-read proxies)
+    matters.sort((x,y)=> y.score - x.score);
+    const mattersFiltered = matters.filter(m=> m.swing > 0.02 || m.score > 0.0001);
+
     return {
       name:p, correct:cur, remaining:rem, maxPossible:mx,
       eliminated, clinched,
       winPct: enumerated ? winShare[p] : null,
       winCnt: WC[p]||0,
       neededAll: required, neededHelpful: helpful, pickedLiveGames: myGames,
+      mattersToMe: mattersFiltered,
       tbPred: (tbPreds&&tbPreds[p]!=null)?tbPreds[p]:null
     };
   });
@@ -756,6 +811,32 @@ function renderPathToWin(gamesOut){
 
   // ===== (A) PER-PLAYER PATH — THE MAIN CONTENT: specific needed games/outcomes =====
   const pct = v => (v==null?null:Math.round(v*100));
+
+  // "GAMES THAT MATTER TO ME" mini-list — the pivotal ~2-3 games for this player, ranked by
+  // how much their outcome swings this player's week. why-text derived from swing + required.
+  function mattersMini(r, early){
+    const list = (r.mattersToMe||[]).slice(0, 3);
+    if(r.clinched || r.eliminated || !list.length) return "";
+    const row = m=>{
+      // intensity: 🔥 required(win-or-out) · ⚠️ big swing / pulls into lead · · extends cushion
+      let icon="·", why="extends your cushion";
+      if(m.required){ icon="🔥"; why="win this or you're out"; }
+      else if(m.swing>=0.15){ icon="⚠️"; why="keeps you alive / pulls you toward the lead"; }
+      else { icon="·"; why="small edge — extends your cushion"; }
+      const swingTxt = (m.swing>0.001 && ctx.hasProbSource) ? ` <span class="mm-sw">±${Math.round(m.swing*100)}%</span>` : "";
+      return `<div class="mm-row" title="${why}">
+        <span class="mm-ic">${icon}</span>
+        <span class="mm-g">${teamChip(m.need)} root <b>${m.need}</b> <span class="muted">(over ${m.other})</span></span>
+        <span class="mm-why">${why}${swingTxt}</span>
+      </div>`;
+    };
+    const hd = early
+      ? `<div class="mm-h">🎯 Games that matter <span class="muted" style="font-weight:400">— early read</span></div>`
+      : `<div class="mm-h">🎯 Games that matter to ${r.name}</div>`;
+    return `<div class="mm">${hd}${list.map(row).join("")}</div>`;
+  }
+
+  const isEarly = ctx.state==="notstarted";
   const pathList = ctx.results.map((r,i)=>{
     let cls = "ptw-row";
     if(r.clinched) cls+=" clinched"; else if(r.eliminated) cls+=" elim"; else if(i===0) cls+=" lead";
@@ -773,6 +854,7 @@ function renderPathToWin(gamesOut){
       <span class="ptw-mid">
         <span class="ptw-name">${r.name}</span>
         <span class="ptw-need">${pathNeedsText(r, ctx)}</span>
+        ${mattersMini(r, isEarly)}
       </span>
       ${like}
     </div>`;
