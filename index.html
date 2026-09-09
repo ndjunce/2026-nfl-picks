@@ -249,17 +249,25 @@
     .ptwg{padding:11px}
     .ptwg-h{flex-wrap:wrap;gap:6px}
     .ptwg-mu{font-size:15px}
-    .ptwg-sides{grid-template-columns:1fr;gap:8px}
+    /* stack the two team sides vertically, each full-width and shrinkable so the rooting
+       chips WRAP within the card and can never run off the right edge. */
+    .ptwg-sides{display:block}                           /* drop the grid entirely on phone */
     .rvs{display:none}                                   /* the middle "vs" divider — drop when stacked */
-    .rside{border:1px solid var(--line);border-radius:9px;padding:8px 9px;background:rgba(255,255,255,.02)}
-    .rside-h{font-size:13px}
-    .rside-rooters{gap:6px}
-    .rooter{font-size:12.5px;padding:4px 9px}
+    .rside{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;
+      border:1px solid var(--line);border-radius:9px;padding:8px 9px;margin-bottom:8px;
+      background:rgba(255,255,255,.02)}
+    .rside:last-child{margin-bottom:0}
+    .rside-h{display:flex;align-items:center;gap:6px;font-size:13px;flex-wrap:wrap}
+    /* the rooter chips: full-width wrapping row, chips shrink-to-content and wrap to new lines */
+    .rside-rooters{display:flex;flex-wrap:wrap;gap:6px;width:100%;max-width:100%;min-width:0}
+    .rooter{font-size:12.5px;padding:4px 9px;max-width:100%;white-space:normal;
+      overflow-wrap:anywhere;flex:0 1 auto}
     .logo{width:24px;height:24px}
     .tag{font-size:10.5px}
 
     /* long team-name chips / matchups never force width */
-    .teamchip{min-width:0}
+    .teamchip{min-width:0;max-width:100%}
+    .ptwg-mu{overflow-wrap:anywhere}
   }
 </style>
 </head>
