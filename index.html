@@ -127,6 +127,34 @@
   .ptw-swing .mu{display:flex;align-items:center;gap:6px;font-weight:800;font-size:14px}
   .ptw-swing-p{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
 
+  /* ---- GAME-FIRST rooting view ---- */
+  .ptw-legend{font-size:11.5px;color:var(--mut);margin-bottom:12px}
+  .ptwg-list{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+  .ptwg{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:11px 12px}
+  .ptwg.decisive{border-color:var(--yel)}
+  .ptwg-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .ptwg-mu{font-weight:800;font-size:15px}
+  .ptwg-kick{font-size:11px;color:var(--mut);font-weight:700}
+  .ptwg-sides{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:start}
+  .rvs{align-self:center;color:var(--mut);font-size:11px;font-weight:800}
+  .rside{min-width:0}
+  .rside-h{display:flex;align-items:center;gap:6px;font-weight:800;font-size:13px;margin-bottom:6px}
+  .rside-team{font-variant-numeric:tabular-nums}
+  .rside-p{margin-left:auto;font-size:12px;color:var(--mut);font-weight:800;font-variant-numeric:tabular-nums}
+  .rside-rooters{display:flex;flex-wrap:wrap;gap:5px}
+  .rooter{font-size:12px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;
+    background:#0d131c;border:1px solid var(--line);color:var(--ink)}
+  .rooter.must{background:rgba(255,96,96,.16);border-color:var(--red);color:var(--red)}
+  .rooter.big{background:rgba(255,210,63,.14);border-color:var(--yel);color:var(--yel)}
+  .rooter.minor{color:var(--mut)}
+  .rooter.dead{opacity:.45;text-decoration:line-through}
+  .rooter.me{box-shadow:inset 0 0 0 1px var(--blu)}
+  .ptw-sub-h{font-size:12px;color:var(--mut);font-weight:800;text-transform:uppercase;
+    letter-spacing:.05em;margin:6px 0 10px}
+  @media (min-width:820px){
+    .ptwg-list{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  }
+
   /* ---- DESKTOP: use the wider screen; mobile layout above is unchanged ---- */
   @media (min-width:820px){
     .wrap{max-width:1080px;padding:22px}
@@ -167,7 +195,7 @@
   <div class="weeklbl" id="weeklbl"></div>
 
   <div class="card">
-    <h2>🧭 Path to Win <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— what each player needs + chance to win the week</span></h2>
+    <h2>🧭 Path to Win <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— who's rooting for what, and who's sweating each game</span></h2>
     <div id="pathtowin"></div>
   </div>
 
@@ -425,21 +453,29 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   const hasProbSource = undecided.some(o=>o.info && o.info.probSource && o.info.probSource!=="even");
 
   const winShare = {}; players.forEach(p=>winShare[p]=0);
+  // conditional win-share: for each undecided game i and player p, credit summed over scenarios
+  // where side A won (condA) vs side B won (condB). Lets us measure how much each game swings
+  // each rooting player's title chance -> the 🔥/⚠️/· intensity tags. probMassA[i] = P(side A wins).
+  let sides = [];
+  const condA = [], condB = [], probMassA = [];
   let enumerated = false;
   if(k>0 && k<=18){
     enumerated = true;
     // precompute per-undecided-game: [teamAbbrWinner, probThatWinner] for each of 2 sides
-    const sides = undecided.map(o=>{
+    sides = undecided.map(o=>{
       const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
       const wp = (o.info && o.info.winProb) ? o.info.winProb : {[A]:0.5,[B]:0.5};
       return { A, B, pA: (wp[A]!=null?wp[A]:0.5) };
     });
+    for(let i=0;i<k;i++){ condA[i]={}; condB[i]={}; probMassA[i]=0; players.forEach(p=>{condA[i][p]=0;condB[i][p]=0;}); }
     const total = 1<<k;
     for(let mask=0; mask<total; mask++){
       let prob = 1;
       const wins = {}; players.forEach(p=>wins[p]=correct[p]);
+      const aWon = [];
       for(let i=0;i<k;i++){
         const winnerIsA = !!(mask & (1<<i));
+        aWon[i] = winnerIsA;
         const s = sides[i];
         prob *= winnerIsA ? s.pA : (1-s.pA);
         const w = winnerIsA ? s.A : s.B;
@@ -449,10 +485,16 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
       let top=-1; players.forEach(p=>{ if(wins[p]>top) top=wins[p]; });
       const tied = players.filter(p=>wins[p]===top);
       const champ = tbWinner(tied);
-      if(champ){ winShare[champ] += prob; }
-      else {
-        // TB unresolved -> split the scenario's credit evenly among the tied (honest: unknown)
-        tied.forEach(t=> winShare[t] += prob/tied.length);
+      // credit this scenario to the champ(s)
+      const credit = {};
+      if(champ){ credit[champ] = prob; }
+      else { tied.forEach(t=> credit[t] = (credit[t]||0) + prob/tied.length); }
+      players.forEach(p=>{ winShare[p] += (credit[p]||0); });
+      // accumulate per-game conditional credit + side-A probability mass
+      for(let i=0;i<k;i++){
+        if(aWon[i]) probMassA[i] += prob;
+        const bucket = aWon[i] ? condA[i] : condB[i];
+        players.forEach(p=>{ if(credit[p]) bucket[p] += credit[p]; });
       }
     }
   }
@@ -490,19 +532,61 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     return b.maxPossible-a.maxPossible;
   });
 
-  // ---- KEY SWING GAMES: undecided games where contenders are split (need opposite results) ----
-  // Score each undecided game by how much it separates the live contenders (non-eliminated).
   const alive = new Set(results.filter(r=>!r.eliminated).map(r=>r.name));
-  const swing = undecided.map(o=>{
+  const elimSet = new Set(results.filter(r=>r.eliminated).map(r=>r.name));
+
+  // ---- GAME-FIRST rooting view: for each undecided game, split players by the side they need,
+  // and tag intensity (🔥 must-win / ⚠️ big / · minor) from the conditional win-share swing. ----
+  // Intensity rule for a rooting player P on game i (their pick = side X):
+  //   • MUST-WIN: if X loses, P is eliminated (their conditional win-share on the losing side is 0
+  //     AND they still have title equity on the winning side), OR clinch requires it.
+  //   • BIG: the game swings P's title chance by a large margin (|share if win − share if lose|).
+  //   • minor: small swing.
+  // If we didn't enumerate (no games / too many), fall back to split-size only (no intensity %).
+  function intensityFor(i, p, pickedA){
+    if(!enumerated) return { tag:"minor", swing:null };
+    const shareIfWin  = pickedA ? condA[i][p] : condB[i][p];   // credit when P's side won
+    const shareIfLose = pickedA ? condB[i][p] : condA[i][p];   // credit when P's side lost
+    // normalize to conditional probabilities (divide by the prob mass of each branch)
+    const massWin  = pickedA ? probMassA[i] : (1-probMassA[i]);
+    const massLose = pickedA ? (1-probMassA[i]) : probMassA[i];
+    const pWin  = massWin>1e-9 ? shareIfWin/massWin : 0;
+    const pLose = massLose>1e-9 ? shareIfLose/massLose : 0;
+    const swing = pWin - pLose;                                 // how much winning this game helps P
+    let tag = "minor";
+    if(pLose < 0.005 && pWin > 0.02) tag = "must";              // lose this -> essentially no title
+    else if(swing >= 0.15) tag = "big";
+    return { tag, swing, pWin, pLose };
+  }
+
+  const gamesView = undecided.map((o,i)=>{
     const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
-    let aCount=0,bCount=0;
-    players.forEach(p=>{ if(!alive.has(p)) return; const pk=(o.g.picks[p]||"").toUpperCase();
-      if(pk===A)aCount++; else if(pk===B)bCount++; });
-    const split = aCount>0 && bCount>0;
-    const minority = split ? Math.min(aCount,bCount) : 0;
-    return { A, B, aCount, bCount, split, minority, info:o.info };
-  }).filter(s=>s.split)
-    .sort((x,y)=> (y.minority-x.minority) || ((y.aCount+y.bCount)-(x.aCount+x.bCount)));
+    const rootA=[], rootB=[];
+    players.forEach(p=>{
+      const pk=(o.g.picks[p]||"").toUpperCase();
+      if(pk!==A && pk!==B) return;                 // player didn't pick this game
+      const pickedA = pk===A;
+      const eliminated = elimSet.has(p);
+      const inten = eliminated ? {tag:"dead",swing:0} : intensityFor(i, p, pickedA);
+      (pickedA?rootA:rootB).push({ name:p, tag:inten.tag, swing:inten.swing, eliminated });
+    });
+    // sort each side: must-win first, then big, then minor; eliminated last
+    const order = {must:0, big:1, minor:2, dead:3};
+    const bySeverity = (x,y)=> (order[x.tag]-order[y.tag]) || (( y.swing||0)-(x.swing||0));
+    rootA.sort(bySeverity); rootB.sort(bySeverity);
+    // aliveA/aliveB = contenders (non-eliminated) on each side -> decisiveness of the game
+    const aliveA = rootA.filter(r=>!r.eliminated).length, aliveB = rootB.filter(r=>!r.eliminated).length;
+    const split = aliveA>0 && aliveB>0;
+    const minority = split ? Math.min(aliveA, aliveB) : 0;
+    const mustCount = rootA.concat(rootB).filter(r=>r.tag==="must").length;
+    const bigCount  = rootA.concat(rootB).filter(r=>r.tag==="big").length;
+    // decisiveness score: split contenders matter most, then must-win + big intensity.
+    const decisiveness = (split?1000:0) + minority*100 + mustCount*10 + bigCount;
+    return { A, B, rootA, rootB, aliveA, aliveB, split, minority, mustCount, bigCount, decisiveness, info:o.info };
+  }).sort((x,y)=> y.decisiveness - x.decisiveness);
+
+  // KEY SWING (kept for compatibility): the split games, most-contested first.
+  const swing = gamesView.filter(s=>s.split);
 
   // week state
   let state = "mid";
@@ -510,7 +594,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   else if(undecided.length===0) state = "final";
 
   return {
-    state, results, swing, hasProbSource,
+    state, results, gamesView, swing, hasProbSource, enumerated,
     tbResolved: tbActual!=null, tbActual,
     finalsCount: finals.length, totalGames: gamesOut.length
   };
@@ -529,7 +613,24 @@ function pathNeedsText(r, ctx){
   return parts.join(" · ");
 }
 
-// Render the PATH TO WIN card. Honest per week-state; likelihood clearly labeled ESTIMATE.
+// Render the PATH TO WIN card — GAME-FIRST "who's rooting for what" view (primary) + a
+// per-player path summary (secondary). Recomputes every time render()/tick() runs, so it
+// auto-updates on the ESPN score-refresh poll (decided games drop out, tags recompute).
+const INTEN = {
+  must: { emoji:"🔥", label:"MUST-WIN", cls:"must" },
+  big:  { emoji:"⚠️", label:"BIG",      cls:"big"  },
+  minor:{ emoji:"·",  label:"minor",    cls:"minor"},
+  dead: { emoji:"✖",  label:"out",      cls:"dead" },
+};
+function rooterChip(r){
+  const t = INTEN[r.tag] || INTEN.minor;
+  const me = r.name==="Nick" ? " me" : "";
+  const title = r.tag==="must" ? "Must-win — eliminated if this goes the other way"
+    : r.tag==="big" ? "Big swing to their week"
+    : r.tag==="dead" ? "Already eliminated" : "Helps, but not critical";
+  return `<span class="rooter ${t.cls}${me}" title="${title}">${t.emoji} ${r.name}</span>`;
+}
+
 function renderPathToWin(gamesOut){
   const el = document.getElementById("pathtowin"); if(!el) return;
   const players = PICKS.players;
@@ -543,76 +644,88 @@ function renderPathToWin(gamesOut){
   }
   const ctx = computePathToWin(gamesOut, players, tbPreds, tbActual);
 
-  // ---- state: not started ----
-  if(ctx.state==="notstarted"){
-    el.innerHTML = `<div class="ptw-banner">🟢 Week not started — ${ctx.totalGames} games, all ${players.length} alive.</div>
-      <div class="note" style="text-align:left">Paths + live win chances appear here as games go final. No scenario math until the first result is in.</div>`;
+  // ===== ALL FINAL: winner + how decided =====
+  if(ctx.state==="final"){
+    const top = ctx.results[0].correct;
+    const tiedTop = ctx.results.filter(r=>r.correct===top);
+    const how = tiedTop.length>1 ? `via tiebreaker (closest to ${ctx.tbActual})` : `outright`;
+    const banner = `<div class="ptw-banner win">🏆 ${ctx.results[0].name} wins the week — ${how}. (${top} correct)</div>`;
+    el.innerHTML = banner + `<div class="ptw-list">` + ctx.results.map((r,i)=>{
+      const cls = "ptw-row"+(i===0?" clinched":" elim")+(r.name==="Nick"?" me":"");
+      return `<div class="${cls}"><span class="ptw-rk">${i===0?'🏆':i+1}</span><span>${avatar(r.name)}</span>`
+        +`<span class="ptw-mid"><span class="ptw-name">${r.name}</span><span class="ptw-need">${r.correct} correct</span></span></div>`;
+    }).join("") + `</div>`;
     return;
   }
 
+  // ===== NOT-STARTED or MID: game-first rooting view =====
+  const est = ctx.enumerated && ctx.hasProbSource
+    ? `Intensity 🔥/⚠️/· from win-probability swing (betting-line based, rough <b>ESTIMATE</b>).`
+    : `Showing rooting split + who's eliminated (no live win-probability source, so no % intensity).`;
+  const banner = ctx.state==="notstarted"
+    ? `<div class="ptw-banner">🟢 Week not started — all ${ctx.totalGames} games ahead, everyone alive. Here's who's pulling for what. <span class="muted" style="font-weight:400">${est}</span></div>`
+    : `<div class="ptw-banner">${ctx.finalsCount} of ${ctx.totalGames} final — decided games drop off; rooting + must-win update live. <span class="muted" style="font-weight:400">${est}</span></div>`;
+
+  // legend
+  const legend = `<div class="ptw-legend">🔥 must-win · ⚠️ big swing · · minor · <span class="muted">sorted most-decisive first</span></div>`;
+
+  // GAME CARDS (primary)
+  const gv = ctx.gamesView || [];
+  const gameCards = gv.map(s=>{
+    const wp = s.info && s.info.winProb ? s.info.winProb : null;
+    const pa = (wp && ctx.hasProbSource) ? Math.round((wp[s.A]!=null?wp[s.A]:0.5)*100) : null;
+    const live = s.info && s.info.state==="in";
+    const kick = (s.info && s.info.state==="pre") ? fmtCT(s.info.date) : (live?"LIVE":"");
+    const decideTag = s.split
+      ? `<span class="tag split">DECIDING ${s.aliveA}–${s.aliveB}</span>`
+      : `<span class="tag consensus">${(s.aliveA+s.aliveB)>0?'lean':'no contenders'}</span>`;
+    const sideBlock = (abbr, rooters, prob)=>{
+      const chips = rooters.length ? rooters.map(rooterChip).join(" ") : `<span class="muted" style="font-size:12px">nobody</span>`;
+      const pTxt = (prob!=null) ? `<span class="rside-p">~${prob}%</span>` : "";
+      return `<div class="rside">
+        <div class="rside-h">${teamChip(abbr)} <span class="rside-team">${abbr}</span> ${pTxt}</div>
+        <div class="rside-rooters">${chips}</div>
+      </div>`;
+    };
+    return `<div class="ptwg ${s.split?'decisive':''}">
+      <div class="ptwg-h">
+        <span class="ptwg-mu">🏈 ${s.A} <span class="muted" style="font-weight:400">vs</span> ${s.B}</span>
+        <span style="display:flex;gap:7px;align-items:center">${kick?`<span class="ptwg-kick">${kick}</span>`:""}${decideTag}</span>
+      </div>
+      <div class="ptwg-sides">
+        ${sideBlock(s.A, s.rootA, pa)}
+        <div class="rvs">vs</div>
+        ${sideBlock(s.B, s.rootB, pa!=null?100-pa:null)}
+      </div>
+    </div>`;
+  }).join("");
+
+  // PER-PLAYER PATH SUMMARY (secondary)
   const pct = v => (v==null?null:Math.round(v*100));
-  const rows = ctx.results.map((r,i)=>{
-    const rank = i+1;
+  const summary = ctx.results.map((r,i)=>{
     let cls = "ptw-row";
-    if(r.clinched) cls+=" clinched";
-    else if(r.eliminated) cls+=" elim";
-    else if(rank===1) cls+=" lead";
-    const isMe = r.name==="Nick";
-    if(isMe) cls+=" me";
-    // likelihood chip (labeled ESTIMATE; only when we enumerated with a real prob source)
+    if(r.clinched) cls+=" clinched"; else if(r.eliminated) cls+=" elim"; else if(i===0) cls+=" lead";
+    if(r.name==="Nick") cls+=" me";
     let like = "";
     if(!r.eliminated && r.winPct!=null && ctx.hasProbSource){
       const p = pct(r.winPct);
       const shown = p<1 && r.winPct>0 ? "<1" : (p>99 && r.winPct<1 ? ">99" : p);
-      like = `<span class="ptw-pct" title="Rough estimate from betting-line win probabilities of the remaining games">~${shown}%</span>`;
-    } else if(r.clinched){
-      like = `<span class="ptw-pct win">100%</span>`;
-    }
-    const needs = pathNeedsText(r, ctx);
+      like = `<span class="ptw-pct" title="Rough estimate from betting-line win probabilities">~${shown}%</span>`;
+    } else if(r.clinched){ like = `<span class="ptw-pct win">100%</span>`; }
     const needCls = r.clinched?"clinch":(r.eliminated?"elim":"");
     return `<div class="${cls}">
-      <span class="ptw-rk">${r.eliminated?'—':rank}</span>
+      <span class="ptw-rk">${r.eliminated?'—':i+1}</span>
       <span>${avatar(r.name)}</span>
-      <span class="ptw-mid">
-        <span class="ptw-name">${r.clinched?'👑 ':''}${r.name}</span>
-        <span class="ptw-need ${needCls}">${needs}</span>
-      </span>
+      <span class="ptw-mid"><span class="ptw-name">${r.clinched?'👑 ':''}${r.name}</span>
+        <span class="ptw-need ${needCls}">${pathNeedsText(r, ctx)}</span></span>
       ${like}
     </div>`;
   }).join("");
 
-  // header banner by state
-  let banner = "";
-  if(ctx.state==="final"){
-    const champ = ctx.results.find(r=>r.clinched) || ctx.results[0];
-    // decide outright vs tiebreaker: was there a tie on correct at the top?
-    const top = ctx.results[0].correct;
-    const tiedTop = ctx.results.filter(r=>r.correct===top);
-    const how = tiedTop.length>1 ? `via tiebreaker (closest to ${ctx.tbActual})` : `outright`;
-    banner = `<div class="ptw-banner win">🏆 ${ctx.results[0].name} wins the week — ${how}. (${top} correct)</div>`;
-  } else {
-    const est = ctx.hasProbSource
-      ? `Win chances are a rough <b>ESTIMATE</b> from betting-line win probabilities of the remaining games.`
-      : `No live win-probability source right now — showing <b>NEEDS only</b> (no percentages).`;
-    banner = `<div class="ptw-banner">${ctx.finalsCount} of ${ctx.totalGames} final · live paths below. <span class="muted" style="font-weight:400">${est}</span></div>`;
-  }
-
-  // key swing games (fold in — the specific undecided games contenders split on)
-  let swingHtml = "";
-  if(ctx.state!=="final" && ctx.swing.length){
-    swingHtml = `<div class="ptw-swing-h">🔑 Key swing games <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">— contenders need these to go opposite ways</span></div>`
-      + ctx.swing.slice(0,5).map(s=>{
-        const wp = s.info && s.info.winProb ? s.info.winProb : null;
-        const pa = wp ? Math.round((wp[s.A]!=null?wp[s.A]:0.5)*100) : null;
-        const probTxt = (pa!=null && ctx.hasProbSource) ? `<span class="ptw-swing-p">${s.A} ~${pa}% · ${s.B} ~${100-pa}%</span>` : "";
-        return `<div class="ptw-swing">
-          <span class="mu">${teamChip(s.A)} <span class="muted" style="font-weight:400">vs</span> ${teamChip(s.B)}</span>
-          <span style="display:flex;align-items:center;gap:8px">${probTxt}<span class="tag split">SPLIT ${s.aCount}–${s.bCount}</span></span>
-        </div>`;
-      }).join("");
-  }
-
-  el.innerHTML = banner + `<div class="ptw-list">${rows}</div>` + swingHtml;
+  el.innerHTML = banner + legend
+    + `<div class="ptwg-list">${gameCards || '<div class="note" style="text-align:left">All games decided.</div>'}</div>`
+    + `<div class="ptw-sub-h">📋 Each player's path</div>`
+    + `<div class="ptw-list">${summary}</div>`;
 }
 
 // Flag which games the group is SPLIT on (differentiators) vs consensus (won't move standings).
