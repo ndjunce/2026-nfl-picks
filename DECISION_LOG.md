@@ -18,3 +18,8 @@ Stack: static HTML/JS/CSS. Picks live in `picks.js` (`window.PICKS`), generated 
 - **Froze baseline:** annotated tag `good-2026-picks-baseline` → commit `34cf85a` (pushed to remote, verified via `git ls-remote --tags`). Rollback: `git reset --hard good-2026-picks-baseline && git push --force origin main` (only on explicit request).
 - **Item 6 (CSS only):** dark-primary team logos (NYG, BAL, CHI, NE, JAX, LV…) were blending into the dark bg. Added a light chip behind every logo — `background:#f2f4f8; border-radius:50%; padding:2px; box-shadow:0 0 0 1px rgba(255,255,255,.18)` — on `.logo` (index.html, inherits to all size variants) and `.tlogo` (stats.html). Logos are designed for white, so all 32 read cleanly. No markup/JS/data touched; text-abbr fallback unaffected. Rejected alternatives: outline-only (still muddy on navy), dark-variant logos (no reliable CDN variant per team).
 - Verified: both files' JS still parses. Live verification after push.
+
+### Item 6 — outcome (live-verified)
+- Push initially rejected: remote had a new commit `c3926d9 "Rename site to 2026 Picks"` (title change) made after the baseline, touching the same files. Rebased my logo-fix commit on top (clean, no conflicts) so BOTH survive — did NOT force-push over the rename. Final history: `0518578` (logo chip) → `c3926d9` (rename) → `34cf85a` (tagged baseline).
+- **Live verified** (headless, https://ndjunce.github.io/2026-nfl-picks/): 178 logos render with the chip (`background rgb(242,244,248)`, `border-radius 50%`, `padding 2px`); dark team (NE) confirmed sitting on the light chip; title now "2026 Picks". Item 6 DONE.
+- Note: someone/another machine pushes to this repo (the rename); always `git fetch` + rebase before pushing future changes here.
