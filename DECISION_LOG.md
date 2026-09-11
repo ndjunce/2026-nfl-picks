@@ -29,3 +29,13 @@ Stack: static HTML/JS/CSS. Picks live in `picks.js` (`window.PICKS`), generated 
 - Fetch showed no external commits this time; clean push `7e19f3a..031fea7`.
 - **Live-verified on the actual NYG-over-DAL row** (Chet's games-that-matter, text "NYG root NYG (over DAL)"): that NYG logo computes width/height 20px, background rgb(255,255,255), border-radius 50%, padding 3px, box-shadow rgba(0,0,0,.15) 0 0 0 1px. All approved values confirmed on the real row (not a generic render).
 - Pending user judgment: if the white chip feels too loud, dial to light-gray `#f7f8fa` (one-line change, both files).
+
+## 2026-08-13 — Item 5: Path-to-Win readability (full 5) — live-verified
+Restore point before this: tag `good-2026-logos-done` (bc9807f). This change is `5dd5925`.
+- **De-boxed** the "games that matter" mini-list: removed the `.mm` card chrome (blue bg / border / left-accent / padding) → tight indented sub-list under the player name (no card-in-a-card).
+- **Tightened rows:** avatar 44→36px, list gap 8→6, row gap 11→9, padding 10/12→8/10, name 16→15px.
+- **Short intensity tags** replace wordy phrases: 🔥 must-win / ⚠️ big / · minor (colored red/yellow/muted); full phrase kept in the row `title` tooltip.
+- **Plain phrasing, no chevron** (per user): `root NYG (over DAL)` → `[logo] NYG over DAL`. Rejected `›` to avoid reading as "vs".
+- **One compact line per game.** CSS + template only; no math/ranking/data touched (computePathToWin/mattersToMe unchanged).
+- **Live-verified** (headless, cache-disabled, on the real NYG-over-DAL row): `.mm` bg rgba(0,0,0,0) / border 0 / pad 0 (de-boxed), avatar 36px, tag "big", row text "NYG over DAL", no chevron, 6 player rows. 
+- GitHub Pages CDN took ~1-2 min to rebuild after push (verify waited for `.mm-tag` to appear in the raw CDN file, then re-rendered with Network.setCacheDisabled to beat browser cache). Rollback if disliked: `git reset --hard good-2026-logos-done && git push --force origin main`.
