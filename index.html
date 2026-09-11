@@ -106,16 +106,16 @@
   .ptw-banner{font-size:13px;color:var(--ink);background:var(--bg);border:1px solid var(--line);
     border-radius:10px;padding:10px 12px;margin-bottom:12px;line-height:1.5}
   .ptw-banner.win{background:rgba(255,207,63,.1);border-color:var(--gold);font-weight:800;font-size:15px}
-  .ptw-list{display:flex;flex-direction:column;gap:8px}
-  .ptw-row{display:grid;grid-template-columns:22px 44px 1fr auto;gap:11px;align-items:center;
-    padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:11px}
+  .ptw-list{display:flex;flex-direction:column;gap:6px}
+  .ptw-row{display:grid;grid-template-columns:20px 36px 1fr auto;gap:9px;align-items:center;
+    padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
   .ptw-row.lead{border-color:var(--gold);background:rgba(255,207,63,.06)}
   .ptw-row.clinched{border-color:var(--gold);background:rgba(255,207,63,.1)}
   .ptw-row.elim{opacity:.5}
-  .ptw-row .avatar,.ptw-row .avatar-fb{width:44px;height:44px;flex-basis:44px;font-size:16px}
+  .ptw-row .avatar,.ptw-row .avatar-fb{width:36px;height:36px;flex-basis:36px;font-size:14px}
   .ptw-rk{font-weight:800;color:var(--mut);text-align:center;font-variant-numeric:tabular-nums}
   .ptw-mid{display:flex;flex-direction:column;gap:2px;min-width:0}
-  .ptw-name{font-weight:800;font-size:16px}
+  .ptw-name{font-weight:800;font-size:15px}
   .ptw-need{font-size:12px;color:var(--mut);line-height:1.35}
   .ptw-need.clinch{color:var(--gold);font-weight:700}
   .ptw-need.elim{color:var(--red);opacity:.85}
@@ -160,16 +160,17 @@
   .pn-clinch{color:var(--gold)} .pn-elim{color:var(--red)}
   .ptw-pct{display:flex;flex-direction:column;align-items:flex-end;line-height:1.05}
   .ptw-pct-lbl{font-size:8px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
-  /* "games that matter to me" mini-list — the pivotal 2-3, personal per player */
-  .mm{margin-top:8px;padding:8px 10px;background:rgba(74,168,255,.06);border:1px solid var(--line);
-    border-left:3px solid var(--blu);border-radius:8px}
-  .mm-h{font-size:11px;font-weight:800;color:var(--blu);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
-  .mm-row{display:flex;align-items:baseline;gap:7px;font-size:12.5px;line-height:1.5;padding:2px 0}
-  .mm-ic{width:16px;flex:0 0 16px;text-align:center}
-  .mm-g{font-weight:700;white-space:nowrap}
+  /* "games that matter" — pivotal 2-3 games per player. De-boxed: a tight indented sub-list
+     under the name (no card-in-a-card), one compact line per game. */
+  .mm{margin-top:5px;padding:0;background:none;border:none}
+  .mm-h{font-size:10px;font-weight:800;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
+  .mm-row{display:flex;align-items:center;gap:6px;font-size:12.5px;line-height:1.35;padding:1px 0;flex-wrap:wrap}
+  .mm-ic{width:14px;flex:0 0 14px;text-align:center;font-size:11px}
+  .mm-g{font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
   .mm-g .logo{width:20px;height:20px}
-  .mm-why{color:var(--mut);font-size:11.5px}
-  .mm-sw{color:var(--blu);font-weight:700;font-variant-numeric:tabular-nums}
+  .mm-tag{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}
+  .mm-tag.must{color:var(--red)} .mm-tag.big{color:var(--yel)} .mm-tag.minor{color:var(--mut)}
+  .mm-sw{color:var(--blu);font-weight:700;font-variant-numeric:tabular-nums;font-size:11.5px}
   /* let the per-player row grow to fit the needed-games list */
   .ptw-row{align-items:flex-start}
   .ptw-row .ptw-rk,.ptw-row .avatar,.ptw-row .avatar-fb{margin-top:2px}
@@ -240,10 +241,10 @@
     /* "GAMES THAT MATTER" mini-list: legible chips + logos, clear separation */
     .mm{padding:9px 10px;margin-top:8px}
     .mm-h{font-size:11px}
-    .mm-row{flex-wrap:wrap;font-size:13px;gap:5px;padding:3px 0}
-    .mm-g{white-space:normal}
+    .mm-row{font-size:13px;gap:6px;padding:2px 0}
+    .mm-g{white-space:nowrap}
     .mm-g .logo{width:20px;height:20px}
-    .mm-why{flex-basis:100%;margin-left:25px;font-size:11.5px}
+    .mm-tag{font-size:10.5px}
     .pn-need-g{font-size:12.5px;padding:3px 8px}
     .pn-need-g .logo{width:20px;height:20px}
 
@@ -899,16 +900,16 @@ function renderPathToWin(gamesOut){
     const list = (r.mattersToMe||[]).slice(0, 3);
     if(r.clinched || r.eliminated || !list.length) return "";
     const row = m=>{
-      // intensity: 🔥 required(win-or-out) · ⚠️ big swing / pulls into lead · · extends cushion
-      let icon="·", why="extends your cushion";
-      if(m.required){ icon="🔥"; why="win this or you're out"; }
-      else if(m.swing>=0.15){ icon="⚠️"; why="keeps you alive / pulls you toward the lead"; }
-      else { icon="·"; why="small edge — extends your cushion"; }
+      // intensity: 🔥 must-win (win-or-out) · ⚠️ big (swings the week) · · minor (cushion).
+      // The icon carries the meaning; the short tag labels it. Full phrase kept in the tooltip.
+      let icon="·", tag="minor", tagCls="minor", why="small edge — extends your cushion";
+      if(m.required){ icon="🔥"; tag="must-win"; tagCls="must"; why="win this or you're out"; }
+      else if(m.swing>=0.15){ icon="⚠️"; tag="big"; tagCls="big"; why="keeps you alive / pulls you toward the lead"; }
       const swingTxt = (m.swing>0.001 && ctx.hasProbSource) ? ` <span class="mm-sw">±${Math.round(m.swing*100)}%</span>` : "";
       return `<div class="mm-row" title="${why}">
         <span class="mm-ic">${icon}</span>
-        <span class="mm-g">${teamChip(m.need)} root <b>${m.need}</b> <span class="muted">(over ${m.other})</span></span>
-        <span class="mm-why">${why}${swingTxt}</span>
+        <span class="mm-g">${teamChip(m.need)} <b>${m.need}</b> <span class="muted" style="font-weight:400">over ${m.other}</span></span>
+        <span class="mm-tag ${tagCls}">${tag}</span>${swingTxt}
       </div>`;
     };
     const hd = early
