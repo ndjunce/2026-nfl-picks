@@ -23,3 +23,9 @@ Stack: static HTML/JS/CSS. Picks live in `picks.js` (`window.PICKS`), generated 
 - Push initially rejected: remote had a new commit `c3926d9 "Rename site to 2026 Picks"` (title change) made after the baseline, touching the same files. Rebased my logo-fix commit on top (clean, no conflicts) so BOTH survive — did NOT force-push over the rename. Final history: `0518578` (logo chip) → `c3926d9` (rename) → `34cf85a` (tagged baseline).
 - **Live verified** (headless, https://ndjunce.github.io/2026-nfl-picks/): 178 logos render with the chip (`background rgb(242,244,248)`, `border-radius 50%`, `padding 2px`); dark team (NE) confirmed sitting on the light chip; title now "2026 Picks". Item 6 DONE.
 - Note: someone/another machine pushes to this repo (the rename); always `git fetch` + rebase before pushing future changes here.
+
+### Item 6 v2 — stronger chip + bigger small logos (live-verified on NYG/DAL)
+- Base `.logo` (index.html) + `.tlogo` (stats.html): chip now **pure white `#ffffff`**, **padding 3px**, **dark defining ring `box-shadow:0 0 0 1px rgba(0,0,0,.15)`** (was #f2f4f8 / 2px / faint white ring). Small logos bumped to **20px**: `.pn-need-g .logo` + `.mm-g .logo` (desktop + mobile blocks), stats `.tlogo` 18→20. CSS only.
+- Fetch showed no external commits this time; clean push `7e19f3a..031fea7`.
+- **Live-verified on the actual NYG-over-DAL row** (Chet's games-that-matter, text "NYG root NYG (over DAL)"): that NYG logo computes width/height 20px, background rgb(255,255,255), border-radius 50%, padding 3px, box-shadow rgba(0,0,0,.15) 0 0 0 1px. All approved values confirmed on the real row (not a generic render).
+- Pending user judgment: if the white chip feels too loud, dial to light-gray `#f7f8fa` (one-line change, both files).
