@@ -131,6 +131,20 @@
 
   /* ---- GAME-FIRST rooting view ---- */
   .ptw-legend{font-size:11.5px;color:var(--mut);margin-bottom:12px}
+  /* "how the % works" explainer — collapsible, sits below the banner + above each player's path */
+  .pct-explain{background:var(--bg);border:1px solid var(--line);border-radius:10px;
+    padding:0 12px;margin:12px 0;font-size:12.5px}
+  .pct-explain summary{cursor:pointer;padding:11px 0;font-weight:800;color:var(--blu);
+    list-style:none;outline:none}
+  .pct-explain summary::-webkit-details-marker{display:none}
+  .pct-explain summary::before{content:"▸ ";color:var(--mut)}
+  .pct-explain[open] summary::before{content:"▾ "}
+  .pct-explain .body{padding:2px 0 13px;color:var(--ink);line-height:1.55}
+  .pct-explain .body b{color:var(--ink)}
+  .pct-explain .body .muted{color:var(--mut)}
+  .pct-explain .body h4{margin:12px 0 5px;font-size:12.5px;color:var(--blu);text-transform:none;letter-spacing:0}
+  .pct-explain .body ul{margin:5px 0;padding-left:18px}
+  .pct-explain .body li{margin:3px 0}
   .ptwg-list{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
   .ptwg{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:11px 12px}
   .ptwg.decisive{border-color:var(--yel)}
@@ -891,6 +905,39 @@ function renderPathToWin(gamesOut){
   // legend
   const legend = `<div class="ptw-legend">🔥 must-win · ⚠️ big swing · · minor · <span class="muted">games sorted most-decisive first</span></div>`;
 
+  // ---- "How the % is calculated" explainer (collapsible; sits below banner, above each player's path) ----
+  const pctExplain = `<details class="pct-explain"><summary>How the win % is calculated</summary>
+    <div class="body">
+      <b>Exact enumeration over the remaining games.</b>
+      <h4>1) Each undecided game gets a win probability for each side, from this hierarchy:</h4>
+      <ul>
+        <li>ESPN's live win % if the game is in progress, else</li>
+        <li>pregame betting odds — the spread converted to a probability via a logistic curve (~-3 spread = 60%, -7 = 71%, -10 = 78%, capped 50–92%), else</li>
+        <li>a live score + time-left heuristic, else</li>
+        <li>50/50 if there's no odds source.</li>
+      </ul>
+      <h4>2) It enumerates every possible combination of outcomes.</h4>
+      With <b>k</b> undecided games that's <b>2<sup>k</sup></b> scenarios — every way the games could break. For each scenario it:
+      <ul>
+        <li>computes the probability of that exact scenario (the product of each game's chosen-side probability),</li>
+        <li>tallies each player's correct picks (locked-in finals + which remaining picks hit),</li>
+        <li>finds who wins it — most correct, and if tied, the <b>tiebreaker</b> (closest to the DEN/KC total) breaks it,</li>
+        <li>credits that scenario's probability to the winner.</li>
+      </ul>
+      <h4>3) A player's win % = the sum of the probabilities of every scenario they win.</h4>
+      So it accounts for <b>both</b>:
+      <ul>
+        <li><b>everyone else's picks</b> — a game only helps you if you and a rival picked differently; a game you both picked the same won't separate the standings, and</li>
+        <li><b>the odds</b> — each scenario is weighted by how likely it is per the betting lines.</li>
+      </ul>
+      In short: all 6 players' picks run against the odds-weighted probability of every remaining outcome, with the tiebreaker resolving ties.
+      <h4>The 🔥 / ⚠️ / · intensity tags</h4>
+      come from the same enumeration — how much a specific game swings your win-share (scenarios where one side wins vs the other). A <b>must-win</b> is a game where you lose almost all your winning scenarios if that team loses.
+      <h4>Honest limits</h4>
+      <span class="muted">It's exact (not simulated) when games ≤ 18, odds-aware, and pick-interaction-aware. It assumes games are independent (real ones correlate a bit) and the spread→probability curve is an approximation — so it's labeled an <b>ESTIMATE</b>, and the site flags when no real odds source is available (falls back to 50/50).</span>
+    </div>
+  </details>`;
+
   // ===== (A) PER-PLAYER PATH — THE MAIN CONTENT: specific needed games/outcomes =====
   const pct = v => (v==null?null:Math.round(v*100));
 
@@ -974,6 +1021,7 @@ function renderPathToWin(gamesOut){
   }).join("");
 
   el.innerHTML = banner
+    + pctExplain
     + `<div class="ptw-sub-h">📋 Each player's path — the exact games they need</div>`
     + `<div class="ptw-list">${pathList}</div>`
     + `<div class="ptw-sub-h" style="margin-top:20px">🏈 Who's rooting for what</div>`
