@@ -50,3 +50,26 @@ Write `Code.gs` with:
 ## Status
 BUILD-READY. Two parts: (1) Code.gs + deploy instructions for Nick, (2) site-side JSON reader. Nick deploys the
 script + hands back the /exec URL for wiring. Decided over CSV-per-gid because the sheet is a season-long workflow.
+
+
+## BUG (2026-09-16): buildWeekSchedule → "ESPN HTTP 403" (ESPN blocks Google servers)
+Nick deployed the web app successfully — /exec URL:
+`https://script.google.com/macros/s/AKfycbzeWELGG1lTZRfPtEBcF8-HjAhoecl-IHMtfpA-NL1dNWoqFruvrO7LHmmV3395jZXsrw/exec`
+BUT `buildWeekSchedule(N)` fails with **ESPN HTTP 403**. ROOT CAUSE: Apps Script runs on GOOGLE's servers, and
+ESPN's Akamai layer 403s datacenter/non-browser origins (the SAME reason ESPN can't be hit server-side from Node —
+already documented in the dashboard notes). So the schedule auto-fill (which runs on Google's side) can't reach ESPN.
+
+WHAT STILL WORKS: doGet/JSON picks reading, dropdowns, the whole sheet→site flow. Only the auto-schedule-fill is hit.
+
+FIX OPTIONS (edit chat, pick the cleanest):
+1. In `buildWeekSchedule`, add browser-like headers to UrlFetchApp (User-Agent, Referer, Accept) — sometimes gets
+   past Akamai. Cheap to try first; may or may not work from Google IPs.
+2. If headers fail: fetch the schedule from a source that DOESN'T block Google — e.g. ESPN's CDN core API
+   (`sports.core.api.espn.com`) or another public schedule feed, or Sleeper's NFL schedule if it exposes matchups.
+   Verify whichever actually returns from Apps Script.
+3. FALLBACK (always works): keep `buildWeekSchedule` but if the fetch 403s, don't error — instead create the Week N
+   tab with the header + a TIEBREAKER row and let Nick paste/type the games (or run the CDN fetch client-side). I.e.
+   the schedule-fill is a NICE-TO-HAVE; the tab creation + dropdowns should still succeed even if ESPN is unreachable.
+   Make the function degrade gracefully, not throw.
+PRIORITY: the picks→site JSON flow (doGet) is the core and works — wire the site to the /exec URL first. The
+schedule auto-fill is secondary; fix via option 1/2/3 so it never hard-errors.
