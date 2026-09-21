@@ -56,6 +56,58 @@ you can publish.
 
 ---
 
+---
+
+## 📄 Google Sheet picks (primary weekly input — no git push needed)
+The site can pull each week's picks **live from a published public Google Sheet** on load, so anyone with
+sheet access can enter picks and the site updates without a commit/deploy. `picks.js` stays as the
+**automatic fallback** — if the sheet is unreachable or malformed, the page falls back to the last
+committed `picks.js` and never blanks. `admin.html` also still works as a backup entry method.
+
+### Step 1 — build the sheet in this EXACT layout
+Create a Google Sheet with **one row per game**. The header row must be **exactly** (case-insensitive,
+this order of columns doesn't matter but the names must match):
+
+```
+week,team1,team2,Nick,Clyde,Chet,Henry,Riley,Bobby
+```
+
+- `week` — integer; every game row that week shares it (e.g. `2`).
+- `team1`, `team2` — NFL abbreviations, e.g. `DET`, `BUF` (same abbrevs the scoreboard uses: `WSH`, `LAR`, `LAC`, `LV`, `SF`, `TB`, `NYG`, `NYJ`, `NO`, `NE`, `KC`, `JAX`…).
+- Each **player column** — that player's picked team for the game (must equal `team1` or `team2`); blank = no pick.
+- **Tiebreaker row** — a final row where **`team1` = `TIEBREAKER`**, `team2` left blank, and each player's
+  column holds their **numeric predicted total points** for the tiebreaker game.
+- **Tiebreaker game convention:** the tiebreaker applies to the **LAST game row** in the sheet (the same
+  convention `picks.js` uses today). So put the game you want as the tiebreaker as the last game row,
+  then the `TIEBREAKER` totals row beneath it.
+
+A ready-to-copy example is in the repo: **`SHEET_TEMPLATE.csv`** (it's the current Week 2 picks, so you
+can paste it into a sheet, publish, and see it match the live site exactly). Just paste it into a Google
+Sheet (File → Import → Upload → *replace current sheet*, or paste cells directly).
+
+### Step 2 — publish it as CSV
+In the sheet: **File → Share → Publish to web → (Entire document or the picks tab) → CSV → Publish.**
+Copy the URL it gives you. It looks like:
+
+```
+https://docs.google.com/spreadsheets/d/e/<long-id>/pub?gid=0&single=true&output=csv
+```
+
+Keep the sheet **published/public-readable** (it's just game picks, nothing sensitive).
+
+### Step 3 — hand the URL back
+Send me that published CSV URL and I'll paste it into `SHEET.csvUrl` in `index.html` and test it live.
+(Until then, `SHEET.csvUrl` is empty, so the site keeps using `picks.js` exactly as before.)
+
+### Honest tradeoffs
+- **Pro:** no weekly git push; anyone with sheet edit access enters picks; instant updates.
+- **Con:** the sheet must stay published; and the parse is only as reliable as the sheet's format — a
+  renamed column or a typo'd abbreviation can make that week fail to parse (it then falls back to
+  `picks.js`). Keep the header row and abbreviations exactly as above.
+- The git "receipt" trail is replaced by the **sheet's own version history** for sheet-entered weeks.
+
+---
+
 ## One-time setup / hosting
 Already live on **GitHub Pages** (repo `ndjunce/2026-nfl-picks`, Public — required for free Pages;
 game picks only, nothing sensitive). Pages source = branch `main`, folder `/(root)`.

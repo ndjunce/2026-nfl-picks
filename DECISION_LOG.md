@@ -59,3 +59,17 @@ Nick wants the picks site to pull picks LIVE from a public Google Sheet on load 
 
 ## 2026-09-16 — Google Sheet picks: froze current site + finalized schema before build
 Nick wants the Google Sheet picks feature but to protect the working site. DECISION: Option A (freeze tag + build on same repo) over a separate site — because the design already keeps picks.js as an automatic fallback (sheet failure never blanks the page), so a freeze tag fully covers the risk without the overhead of maintaining two sites/URLs. Froze current working commit as tag `good-picks-presheet` → 34beda0 (pushed to origin) = instant rollback. Updated `GOOGLE_SHEET_SPEC.md` with a CONCRETE column schema (week|team1|team2|Nick|Clyde|Chet|Henry|Riley|Bobby + a TIEBREAKER row convention) so Nick's sheet and the parser match exactly, and asked the edit chat to produce a template + instructions so Nick can build the sheet, publish it, and hand back the URL. TWO-PARTER (like Yahoo): edit chat builds reader + template (placeholder URL) → Nick creates+publishes sheet → edit chat wires real URL + tests. picks.js fallback + admin.html retained.
+
+
+## 2026-08-13 — Google Sheet picks source (Option A: published CSV) — WORKS (URL pending from Nick)
+Per GOOGLE_SHEET_SPEC.md. Site now pulls picks LIVE from a published public Google Sheet on load, parsed into the SAME window.PICKS structure so ALL render/leaderboard/Path-to-Win code is UNCHANGED — only the data SOURCE swaps. picks.js stays the automatic fallback (never blanks); admin.html remains a backup. Freeze point: good-picks-presheet -> 34beda0 (rollback via git reset --hard).
+
+**Approach:** Option A (published CSV, File→Share→Publish to web→CSV) — keyless, CORS-friendly, no secret, right for static GitHub Pages. Rejected Option C (Sheets API v4) = needs an API key.
+
+**Added (index.html):** `SHEET` config (csvUrl placeholder "" + season + players); `parseCSV()` (RFC-4180-ish: quoted fields, commas, CRLF, BOM); `parseSheetToPicks()` -> window.PICKS shape (throws on missing column / no rows so caller falls back); `loadPicksFromSheet()` (fetch+parse, returns null on ANY failure). boot() made async: awaits the sheet, overrides window.PICKS on success, else keeps picks.js; LIVE_WEEK/selectedWeek finalized AFTER PICKS settles (sheet can set a different week); small `#srcNote` badge shows "live Google Sheet" vs "picks.js (committed)".
+
+**Schema (documented in README + SHEET_TEMPLATE.csv):** header `week,team1,team2,Nick,Clyde,Chet,Henry,Riley,Bobby`, one row per game, team abbrevs = scoreboard abbrevs. Tiebreaker = a row with team1="TIEBREAKER" holding each player's numeric total; **tiebreaker game = the LAST game row** (same convention picks.js uses). SHEET_TEMPLATE.csv seeded with the current Week 2 picks so it matches the live site 1:1.
+
+**Verified (node):** page JS parses clean; template CSV parses to PICKS and matches committed picks.js field-for-field (16 games + tiebreakerGame NYG/LAR + tiebreaker values); invalid sheets (missing player col / garbage) throw -> fallback; no-URL -> loadPicksFromSheet() returns null (site behaves exactly as pre-change until wired); quoted-comma CSV field parsed correctly. Removed scratch.
+
+**PENDING:** csvUrl is "" — Nick creates the sheet from SHEET_TEMPLATE.csv, publishes as CSV, hands back the URL; then wire SHEET.csvUrl + test live. Commit ndjunce/noreply. Blast radius: index.html data-source + boot + one note span; README + new template. Zero change to render/grade/Path-to-Win/ESPN/archive logic.
