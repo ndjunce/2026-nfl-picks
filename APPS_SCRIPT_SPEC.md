@@ -78,15 +78,21 @@ schedule auto-fill is secondary; fix via option 1/2/3 so it never hard-errors.
 ## FIXES (2026-09-16) — live-week detection + Week 2 blank override
 Site is wired + loading from sheet (weeks 1-10 clickable). Two issues Nick sees live:
 
-### FIX 1 — open on the ACTUAL current NFL week, not the newest sheet week
-Problem: the site sets "live week" = the HIGHEST week number present in the sheet. But Nick auto-filled SCHEDULES
-through Week 10 (via buildWeekSchedule), so the site thinks Week 10 is live and OPENS THERE. The green-ring "live
-week" + default selected tab should be the REAL current NFL week (~Week 2/3 now), not the max sheet week.
-- FIX: determine the current NFL week from a real source (the site already knows it — the ESPN scoreboard / NFL
-  state gives current week; the OLD picks.js also had `week`). Use the ACTUAL current NFL week as LIVE_WEEK +
-  the default `selectedWeek` on load. Weeks in the sheet beyond the current week are FUTURE (schedule-only, clickable
-  but no picks yet), NOT "live".
-- So: default open tab = current NFL week; weeks < current = past/archive; weeks > current = future schedule.
+### FIX 1 — GREEN DOT (live week) is on the wrong week; should be the ACTUAL current NFL week
+Clarified by Nick: there are TWO separate indicators, and only one is wrong:
+- **BLUE box = the week the user CLICKED (selectedWeek).** This is CORRECT — keep it; it must keep following clicks.
+- **GREEN dot = the LIVE/active week indicator (LIVE_WEEK).** This is WRONG — it's on Week 10 because LIVE_WEEK is
+  set to the HIGHEST week in the sheet, but Nick auto-filled SCHEDULES through Week 10. The green dot must mark the
+  REAL current NFL week (~Week 2/3 now).
+FIX:
+- Set **LIVE_WEEK = the actual current NFL week** from a real source (ESPN scoreboard / NFL state — the site knew
+  this before the sheet change; old picks.js also carried `week`). NOT the max sheet week. → green dot lands on the
+  true current week.
+- On FIRST load, default **selectedWeek (blue) = LIVE_WEEK (current NFL week)** so the page OPENS on the live week.
+  After that, blue follows the user's clicks (unchanged); green dot stays fixed on the current NFL week regardless.
+- Weeks in the sheet beyond the current NFL week = FUTURE (schedule-only, clickable, no picks yet), NOT live.
+- So: green dot = current NFL week (fixed); blue box = clicked week (default = current on open); weeks<current =
+  archive; weeks>current = future schedule.
 
 ### FIX 2 — Week 2 picks not showing (blank sheet tab overrides picks.js)
 Problem: Week 1 shows picks, Week 2 does not. Nick's real Week 2 picks are in `picks.js`, but the sheet has a
