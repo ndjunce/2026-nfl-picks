@@ -146,3 +146,17 @@ Per APPS_SCRIPT_SPEC.md BUG section. ROOT CAUSE: Apps Script runs on Google's se
 
 ## 2026-09-16 — Apps Script /exec CONFIRMED PUBLIC + returning JSON; ready to wire site
 Access fix worked. Tested /exec live (AKfycbze...exec): HTTP 200, content-type application/json, returns {season:2026, 6 players, weeks 1-8, Week2=16 games}. No more login page — public confirmed. Picks Tools menu + buildWeekSchedule working (Nick entered weeks 1-7 via the script; auto-schedule fetch succeeding now). FINAL STEP: edit chat sets SHEET.jsonUrl = the /exec URL + tests (weeks populate, picks+tiebreakers parse, logos render, fallback intact). Workflow once wired: enter pick in sheet → (Apps Script caches ~few min) → refresh site → pick shows. Replaces the admin.html→picks.js→git push chore. Viewer must reload (site reads sheet on load / auto-refresh). Nick happy with the trade-off (load delay >> manual git push). picks.js+season.js remain fallback; freeze tag good-picks-presheet = rollback.
+
+
+## 2026-09-16 — Wired the site to the live Apps Script /exec — WORKS (picks pull from sheet)
+Deployment is now public (Nick fixed access → Anyone). Verified /exec live: HTTP 200, JSON (NOT html), season 2026, 6 players, weeks 1-10 (schedules auto-filled — buildWeekSchedule reached ESPN this time), Week 2 = 16 games. Set `SHEET.jsonUrl` in index.html to the /exec URL.
+
+**Site test (jsdom vs the real payload + committed picks.js/season.js eval'd in as the real page loads them):**
+- TEST A (sheet wired): window.PICKS._source="google-sheet", live week=10 (newest tab), 14 games; week bar shows the "has" (clickable) class on weeks 1,2,3,4,5,6,7,8,9,10 → past weeks populate ARCHIVE + live week present; 28 team-logo <img class="logo"> in the games pane → logos render next to sheet picks (teamChip unchanged, picks flow into same PICKS/ARCHIVE); source badge "picks: live Google Sheet (Apps Script)". ✓
+- TEST B (URL HTTP 500): falls back to picks.js (week 2, 16 games), page does NOT blank, no fatal "No picks available". ✓
+- TEST C (unauthorized HTML body): HTML guard trips → falls back to picks.js. ✓
+(Note: ARCHIVE/SEASON read as empty via window in the harness because they're top-level `const` not attached to window — confirmed real population via the rendered week-bar "has" classes instead.)
+
+**HONEST STATE:** the sheet currently has games (real matchups, auto-filled) but picks are still BLANK / tiebreakers null for every week — nobody has entered picks yet. So the site now shows each week's matchups from the sheet with no highlighted picks until the group fills the sheet. That's correct, not a bug; leaderboard/paths populate as picks + ESPN winners come in.
+
+Commit ndjunce/noreply. Blast radius: index.html SHEET.jsonUrl one-liner only. Fallback path proven intact (freeze tag good-picks-presheet still valid).

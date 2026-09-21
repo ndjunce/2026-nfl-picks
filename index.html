@@ -356,9 +356,9 @@ const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scorebo
    paste the /exec URL into SHEET.jsonUrl below. Setup steps are in the README.
    ============================================================================ */
 const SHEET = {
-  // <<< PASTE THE APPS SCRIPT WEB-APP /exec URL HERE (leave "" to use picks.js/season.js only) >>>
-  // Looks like: https://script.google.com/macros/s/AKfy..../exec
-  jsonUrl: "",
+  // Apps Script web-app /exec URL (public: Execute as me · Access Anyone). Verified live 2026-09-16:
+  // returns JSON {season, players[6], weeks} with auto-filled NFL schedules. "" reverts to picks.js/season.js.
+  jsonUrl: "https://script.google.com/macros/s/AKfycbzeWELGG1lTZRfPtEBcF8-HjAhoecl-IHMtfpA-NL1dNWoqFruvrO7LHmmV3395jZXsrw/exec",
   season: 2026,
   players: ["Nick","Clyde","Chet","Henry","Riley","Bobby"],
 };
