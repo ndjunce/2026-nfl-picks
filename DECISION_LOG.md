@@ -191,3 +191,10 @@ Per the 2026-09-16 clinch-bug entry. BUG: Path-to-Win only set `clinched = cur >
 **Verified (node, computePathToWin directly):** Henry scenario — 11 correct, LAR/NYG undecided, others 2 correct/max 3 → all others eliminated, Henry `clinched:true eliminated:false` → "✓ Henry CLINCHED (winner)". Control — Henry/Bobby tied 5-5 with an undecided game each picked → clinched set EMPTY (no false clinch). Page JS parses clean; get_diagnostics clean. Removed scratch.
 
 Commit ndjunce/noreply. Blast radius: computePathToWin clinch post-pass only (~14 lines); elimination logic, enumeration, win%, rendering untouched. Note: also robust if the LAR/NYG feed game is actually final IRL but unmarked — clinch-by-elimination fires either way.
+
+
+## 2026-09-16 — Picks clinch/elim bug #2: Riley shows ~0% but NOT eliminated (inconsistent with enumeration)
+Week 2 live: Henry 11 (needs LAR, ~100%), Riley 10 (needs LAR, ~0%, NOT eliminated), everyone else ELIMINATED. One game left: NYG vs LAR (both Henry & Riley picked LAR).
+Math: LAR wins → Henry 12, Riley 11 (Henry wins). NYG wins → Henry 11, Riley 10 (Henry wins). So Henry wins in EVERY outcome = truly CLINCHED; Riley truly ELIMINATED.
+BUG: the `eliminated` flag uses `maxPossible < oppCurTop` → Riley max=11 vs Henry current=11 → 11<11 false → "not eliminated (alive tie)". But that ignores that Henry ALSO has a live pick in the SAME game — the scenario that lifts Riley to 11 (LAR win) ALSO lifts Henry to 12. So Riley can NEVER catch Henry. The simple max-possible math is scenario-blind.
+KEY: the win% ENUMERATION already knows this — it shows Riley ~0%. So the flags are INCONSISTENT with the enumeration. FIX: derive eliminated/clinched FROM the enumeration (win-share): a player with 0 winning scenarios (across all remaining game outcomes, tiebreaker-aware) = ELIMINATED; if only one player has >0 win scenarios = CLINCHED. Make elim/clinch consistent with the % the tool already computes. This also fixes the prior Henry "needs help" issue at the root (Henry = only player with >0 → CLINCHED; Riley 0% → ELIMINATED). Spec/fix: edit chat.
