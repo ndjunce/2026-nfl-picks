@@ -90,3 +90,24 @@ week | team1 | team2 | Nick | Clyde | Chet | Henry | Riley | Bobby
 - Reuse ALL existing render/leaderboard/Path-to-Win logic — only swap the DATA SOURCE (picks.js → sheet fetch,
   with picks.js as fallback). Keep it a clean, reversible change.
 - Weekly archive (season.js) still applies — a finished week can still be archived as before.
+
+
+## FUTURE IDEAS (Nick, 2026-09-16) — schedule-populated tabs + Google Apps Script
+Sheet is titled "Phipps Tavern 2026 Picks".
+
+### Idea A — all week tabs clickable + show that week's NFL schedule
+Make every week tab (1-18) clickable; a future week with no picks yet still shows that week's NFL SCHEDULE (the
+matchups) pulled from ESPN's schedule endpoint (by week), so tapping "Week 8" shows the Week 8 games even before
+picks are entered. (Weeks with picks already render; this adds schedule-only display for un-entered weeks.) Small
+separate build.
+
+### Idea B — Google Apps Script (RECOMMENDED "fancy" path, bigger build)
+Apps Script = free code running inside the Google Sheet. Unlocks a much nicer workflow than raw CSV+gids:
+- AUTO-FILL each week's NFL schedule into a new tab (script pulls week matchups from ESPN, writes team1/team2 rows) →
+  Nick doesn't hand-type games, just picks winners via dropdowns.
+- PUBLISH the whole sheet as ONE JSON URL (Apps Script web app / doGet) → the site reads one URL for ALL weeks
+  instead of juggling a gid per tab. Cleaner than the export-CSV-per-tab model.
+- Could auto-create the per-game dropdowns (data validation) too.
+TRADEOFFS (honest): a real script to write + deploy; Nick authorizes it once (simpler than Yahoo OAuth); bigger build
+than the CSV path. If Nick will use this sheet all season, Apps Script is the better long-term workflow. NOT a
+tonight task — proper build, and interview tomorrow. Decide CSV-now vs Apps-Script-upgrade later.
