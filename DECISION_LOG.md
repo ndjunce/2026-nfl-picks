@@ -198,3 +198,16 @@ Week 2 live: Henry 11 (needs LAR, ~100%), Riley 10 (needs LAR, ~0%, NOT eliminat
 Math: LAR wins → Henry 12, Riley 11 (Henry wins). NYG wins → Henry 11, Riley 10 (Henry wins). So Henry wins in EVERY outcome = truly CLINCHED; Riley truly ELIMINATED.
 BUG: the `eliminated` flag uses `maxPossible < oppCurTop` → Riley max=11 vs Henry current=11 → 11<11 false → "not eliminated (alive tie)". But that ignores that Henry ALSO has a live pick in the SAME game — the scenario that lifts Riley to 11 (LAR win) ALSO lifts Henry to 12. So Riley can NEVER catch Henry. The simple max-possible math is scenario-blind.
 KEY: the win% ENUMERATION already knows this — it shows Riley ~0%. So the flags are INCONSISTENT with the enumeration. FIX: derive eliminated/clinched FROM the enumeration (win-share): a player with 0 winning scenarios (across all remaining game outcomes, tiebreaker-aware) = ELIMINATED; if only one player has >0 win scenarios = CLINCHED. Make elim/clinch consistent with the % the tool already computes. This also fixes the prior Henry "needs help" issue at the root (Henry = only player with >0 → CLINCHED; Riley 0% → ELIMINATED). Spec/fix: edit chat.
+
+
+## 2026-09-16 — Clinch/elim bug #2: derive flags FROM the enumeration (fix %↔flag disagreement) — WORKS
+Per the 2026-09-16 clinch/elim #2 entry. BUG: eliminated/clinched used scenario-BLIND max-possible math (`mx < oppCurTop` / `cur > oppMax`) while win% came from the 2^k enumeration. They disagreed on CORRELATED picks: Henry & Riley both picked LAR in the last game, so the LAR-win scenario that lifts Riley also lifts Henry (who leads) → Riley can never catch him. Max-possible said Riley not-eliminated (mx 11 == Henry's cur 11), but the enumeration correctly gave Riley 0%. So Riley showed ~0% yet un-eliminated, and Henry wasn't clinched.
+
+**FIX (index.html, computePathToWin):** when the enumeration ran (`enumerated`), derive the flags from the SAME winCnt the win% uses:
+- `eliminated = (WC[p]||0)===0`  → 0 winning scenarios (tiebreaker-aware) = can't win.
+- `clinched = WC[p]>0 && winnersWithScenarios===1` → sole player with any winning scenario = has won.
+Removed the duplicate `const WC` I'd first added (reused the existing one at the needed-games block — that name collision was a real syntax error I caught in verify). Kept the scenario-blind heuristic ONLY as the non-enumerated fallback (k>18, not hit in practice). The later clinch-by-elimination post-pass now just re-asserts the same result (and covers the fallback) — comment updated.
+
+**Verified (node, correlated-picks repro):** Henry 11 correct / Riley 10, both pick LAR in the lone undecided game → Henry CLINCH (100%), Riley ELIM (0%); consistency check passes for ALL players (0% ⟺ eliminated, sole >0% ⟺ clinched). Control (Henry/Bobby genuine 5-5 race, 1 undecided each picked) → NO false clinch, only buried players eliminated. Page JS + get_diagnostics clean. Removed scratch.
+
+Commit ndjunce/noreply. Blast radius: computePathToWin flag derivation (enumerated branch) + removed dup WC; win%/enumeration/rendering untouched. Flags now always consistent with the displayed %.

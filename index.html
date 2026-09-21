@@ -786,13 +786,26 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   const WC = computePathToWin._winCnt || {};
   const WHIT = computePathToWin._winPickHit || [];
   const WMISS = computePathToWin._winPickMiss || [];
+  // Scenario-aware clinch/elim: derive DIRECTLY from the enumeration (the same math behind the win%),
+  // so the flags never contradict the displayed %. A player with 0 winning scenarios (tiebreaker-aware)
+  // is ELIMINATED; if exactly one player has any winning scenario, that player has CLINCHED. This
+  // correctly handles CORRELATED picks (e.g. two players both need LAR — the scenario that lifts the
+  // trailer also lifts the leader, so the trailer wins 0 scenarios). Only when the enumeration didn't
+  // run (k>18, not reached in practice) do we fall back to the scenario-blind max-possible heuristic.
+  const winnersWithScenarios = enumerated ? players.filter(q=>(WC[q]||0)>0).length : null;
   const results = players.map(p=>{
     const cur = correct[p], rem = remainingFor[p], mx = maxPossible[p];
-    // opponents' best case to gauge whether winning-out is enough
+    // opponents' best case to gauge whether winning-out is enough (fallback heuristic only)
     const oppMax = Math.max(0, ...players.filter(q=>q!==p).map(q=>maxPossible[q]));
     const oppCurTop = Math.max(0, ...players.filter(q=>q!==p).map(q=>correct[q]));
-    const eliminated = mx < oppCurTop;               // can't even reach a rival's locked-in count
-    const clinched = cur > oppMax;                   // already more than anyone else can reach
+    let eliminated, clinched;
+    if(enumerated){
+      eliminated = (WC[p]||0) === 0;                          // no winning scenario -> can't win
+      clinched   = (WC[p]||0) > 0 && winnersWithScenarios===1; // only player who can win -> has won
+    } else {
+      eliminated = mx < oppCurTop;               // scenario-blind fallback (enumeration unavailable)
+      clinched   = cur > oppMax;
+    }
 
     // ---- SPECIFIC NEEDED GAMES/OUTCOMES (the main content) ----
     // For each undecided game p has a pick in, does p have ANY winning combo where that pick MISSED?
@@ -872,12 +885,10 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     };
   });
 
-  // ---- CLINCH-BY-ELIMINATION (bug fix) ----
-  // The per-player `clinched = cur > oppMax` check can miss a mathematically-decided leader while a
-  // tracked game is still undecided. But if EVERY OTHER player is eliminated, the remaining player
-  // has ALREADY WON — nobody left can catch them — regardless of any undecided games (incl. their
-  // own picks). Promote that player to clinched here. (Also promotes the strict guaranteed-min>max
-  // leader, already flagged in-map.) Only applies when there IS a clear survivor.
+  // ---- CLINCH-BY-ELIMINATION (safety net, consistent with the enumeration flags above) ----
+  // With enumeration, `eliminated`/`clinched` already come from winCnt (scenario-aware), so a sole
+  // survivor is already clinched. This pass re-asserts it (and covers the non-enumerated fallback):
+  // if EVERY OTHER player is eliminated, the remaining player has WON regardless of undecided games.
   const nonElim = results.filter(r=>!r.eliminated);
   if(nonElim.length===1 && results.length>1){
     nonElim[0].clinched = true;                    // last player standing = winner
