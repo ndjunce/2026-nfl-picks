@@ -90,33 +90,17 @@ function readWeekSheet_(sheet) {
   };
 }
 
-/* ---------- Pull a week's NFL schedule from ESPN into a "Week N" tab ---------- */
+/* ---------- Build a "Week N" tab (auto-fill games if reachable; else empty for hand-entry) ----------
+   NOTE: Apps Script runs on Google's servers, and ESPN's Akamai layer often 403s datacenter IPs.
+   So the schedule auto-fill is a NICE-TO-HAVE: we try several sources, but if ALL fail we still
+   create the tab (header + TIEBREAKER row + dropdowns) so Nick can hand-enter the games.
+   This function NEVER throws for a fetch failure — it degrades gracefully. -------------------------- */
 function buildWeekSchedule(week) {
   week = Number(week);
-  if (!week || week < 1 || week > 18) throw new Error("week must be 1..18");
-  var url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
-          + "?week=" + week + "&seasontype=2&dates=" + SEASON;
-  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) throw new Error("ESPN HTTP " + res.getResponseCode());
-  var data = JSON.parse(res.getContentText());
-  var events = data.events || [];
+  if (!week || week < 1 || week > 18) { safeToast_("Enter a week number 1-18."); return 0; }
 
-  // extract (team1, team2) per game, ordered by kickoff so the last row is a sensible tiebreaker game
-  var games = [];
-  events.forEach(function (ev) {
-    var comp = ev.competitions && ev.competitions[0];
-    if (!comp || !comp.competitors || comp.competitors.length < 2) return;
-    var c0 = comp.competitors[0], c1 = comp.competitors[1];
-    var a0 = c0.team && c0.team.abbreviation, a1 = c1.team && c1.team.abbreviation;
-    if (!a0 || !a1) return;
-    // list the away team first (team1) then home (team2) for a natural "AT" reading
-    var away = c0.homeAway === "away" ? a0 : a1;
-    var home = c0.homeAway === "home" ? a0 : a1;
-    games.push({ team1: (away || a0).toUpperCase(), team2: (home || a1).toUpperCase(),
-                 date: ev.date || (comp && comp.date) || "" });
-  });
-  games.sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
-  if (!games.length) throw new Error("ESPN returned no games for week " + week);
+  var games = fetchWeekGames_(week);            // [] if every source is blocked/unreachable
+  var autoFilled = games.length > 0;
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var name = "Week " + week;
@@ -125,19 +109,140 @@ function buildWeekSchedule(week) {
 
   // header
   sheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]).setFontWeight("bold");
-  // game rows (team1/team2 filled; player pick cells left blank for dropdowns)
+
+  // game rows (team1/team2 filled if we got them; else NONE — Nick types team1/team2 by hand)
   var rows = games.map(function (g) {
     return [g.team1, g.team2].concat(PLAYERS.map(function () { return ""; }));
   });
+  if (!autoFilled) {
+    // seed a handful of blank game rows so there's an obvious place to type teams + a shape to fill
+    for (var i = 0; i < 16; i++) rows.push(["", ""].concat(PLAYERS.map(function () { return ""; })));
+  }
   // TIEBREAKER row (blank totals for each player to fill)
   rows.push([TIEBREAKER_LABEL, ""].concat(PLAYERS.map(function () { return ""; })));
   sheet.getRange(2, 1, rows.length, HEADER.length).setValues(rows);
 
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, HEADER.length);
-  addDropdowns(week);   // wire per-game dropdowns immediately
-  SpreadsheetApp.getActiveSpreadsheet().toast("Built " + name + " with " + games.length + " games.", "Picks Tools", 5);
+
+  // dropdowns only make sense once team1/team2 exist; safe to run either way (skips blank rows).
+  try { addDropdowns(week); } catch (e) { /* never let dropdowns break tab creation */ }
+
+  if (autoFilled) {
+    safeToast_("Built " + name + " with " + games.length + " games + dropdowns.");
+  } else {
+    safeToast_("Built " + name + " (empty). Schedule sources were unreachable from Google — type each game's " +
+               "team1/team2, then run Picks Tools → Add dropdowns.");
+  }
   return games.length;
+}
+
+/* ---------- Schedule fetch: try several sources; return [] on total failure (never throws) ----------
+   Order: (1) ESPN site scoreboard with browser-like headers, (2) ESPN core CDN API,
+          (3) Sleeper's public NFL schedule. First one that yields games wins. --------------------- */
+function fetchWeekGames_(week) {
+  var sources = [espnSiteGames_, espnCoreGames_, sleeperGames_];
+  for (var i = 0; i < sources.length; i++) {
+    try {
+      var games = sources[i](week);
+      if (games && games.length) {
+        games.sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+        return games;                           // away=team1, home=team2, sorted by kickoff
+      }
+    } catch (e) { /* try the next source */ }
+  }
+  return [];
+}
+
+// (1) ESPN site scoreboard, with browser-like headers (sometimes gets past Akamai from Google IPs).
+function espnSiteGames_(week) {
+  var url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+          + "?week=" + week + "&seasontype=2&dates=" + SEASON;
+  var res = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+      "Referer": "https://www.espn.com/nfl/scoreboard",
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9"
+    }
+  });
+  if (res.getResponseCode() !== 200) return [];
+  var data = JSON.parse(res.getContentText());
+  var out = [];
+  (data.events || []).forEach(function (ev) {
+    var comp = ev.competitions && ev.competitions[0];
+    if (!comp || !comp.competitors || comp.competitors.length < 2) return;
+    var c0 = comp.competitors[0], c1 = comp.competitors[1];
+    var a0 = c0.team && c0.team.abbreviation, a1 = c1.team && c1.team.abbreviation;
+    if (!a0 || !a1) return;
+    var away = c0.homeAway === "away" ? a0 : a1;
+    var home = c0.homeAway === "home" ? a0 : a1;
+    out.push({ team1: String(away || a0).toUpperCase(), team2: String(home || a1).toUpperCase(),
+               date: ev.date || (comp && comp.date) || "" });
+  });
+  return out;
+}
+
+// (2) ESPN core CDN API (different host than the Akamai-guarded site API; often reachable).
+// Lists events with $ref links, then reads each event's competitors for team abbreviations.
+function espnCoreGames_(week) {
+  var base = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/" + SEASON
+           + "/types/2/weeks/" + week + "/events?lang=en&region=us";
+  var res = UrlFetchApp.fetch(base, { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return [];
+  var data = JSON.parse(res.getContentText());
+  var items = data.items || [];
+  var out = [];
+  for (var i = 0; i < items.length; i++) {
+    var ref = items[i] && items[i].$ref;
+    if (!ref) continue;
+    try {
+      var er = UrlFetchApp.fetch(ref.replace(/^http:/, "https:"), { muteHttpExceptions: true });
+      if (er.getResponseCode() !== 200) continue;
+      var ev = JSON.parse(er.getContentText());
+      var comp = ev.competitions && ev.competitions[0];
+      if (!comp || !comp.competitors || comp.competitors.length < 2) continue;
+      // each competitor carries a team $ref; fetch the abbreviation
+      var abbr = comp.competitors.map(function (c) {
+        try {
+          var tr = UrlFetchApp.fetch(String(c.team.$ref).replace(/^http:/, "https:"), { muteHttpExceptions: true });
+          if (tr.getResponseCode() !== 200) return null;
+          var t = JSON.parse(tr.getContentText());
+          return { abbr: t.abbreviation, homeAway: c.homeAway };
+        } catch (e) { return null; }
+      });
+      if (abbr[0] && abbr[1]) {
+        var away = abbr[0].homeAway === "away" ? abbr[0].abbr : abbr[1].abbr;
+        var home = abbr[0].homeAway === "home" ? abbr[0].abbr : abbr[1].abbr;
+        out.push({ team1: String(away).toUpperCase(), team2: String(home).toUpperCase(),
+                   date: ev.date || "" });
+      }
+    } catch (e) { /* skip this event */ }
+  }
+  return out;
+}
+
+// (3) Sleeper's public NFL schedule (doesn't block Google). Returns games w/ home/away abbrevs.
+function sleeperGames_(week) {
+  var url = "https://api.sleeper.app/schedule/nfl/regular/" + week;
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return [];
+  var arr = JSON.parse(res.getContentText());
+  if (!arr || !arr.length) return [];
+  var out = [];
+  arr.forEach(function (g) {
+    var away = g.away, home = g.home;
+    if (!away || !home) return;
+    out.push({ team1: String(away).toUpperCase(), team2: String(home).toUpperCase(),
+               date: g.date || (g.gameday ? (g.gameday + " " + (g.time || "")) : "") });
+  });
+  return out;
+}
+
+// Toast that never throws (menu context always has a spreadsheet; guard anyway).
+function safeToast_(msg) {
+  try { SpreadsheetApp.getActiveSpreadsheet().toast(msg, "Picks Tools", 6); } catch (e) {}
 }
 
 /* ---------- Per-game dropdowns (each game's two team abbrevs) ---------- */
@@ -159,7 +264,7 @@ function addDropdowns(week) {
       .build();
     sheet.getRange(r + 1, firstPlayerCol, 1, PLAYERS.length).setDataValidation(rule);
   }
-  SpreadsheetApp.getActiveSpreadsheet().toast("Dropdowns set for Week " + week + ".", "Picks Tools", 4);
+  safeToast_("Dropdowns set for Week " + week + " (games with both teams filled).");
 }
 
 /* ---------- Custom menu ---------- */
