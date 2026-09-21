@@ -211,3 +211,9 @@ Removed the duplicate `const WC` I'd first added (reused the existing one at the
 **Verified (node, correlated-picks repro):** Henry 11 correct / Riley 10, both pick LAR in the lone undecided game → Henry CLINCH (100%), Riley ELIM (0%); consistency check passes for ALL players (0% ⟺ eliminated, sole >0% ⟺ clinched). Control (Henry/Bobby genuine 5-5 race, 1 undecided each picked) → NO false clinch, only buried players eliminated. Page JS + get_diagnostics clean. Removed scratch.
 
 Commit ndjunce/noreply. Blast radius: computePathToWin flag derivation (enumerated branch) + removed dup WC; win%/enumeration/rendering untouched. Flags now always consistent with the displayed %.
+
+## 2026-08-13 — END-TO-END PIPELINE CONFIRMED LIVE (sheet → site) — WORKS
+- User ran the real end-to-end test: entered a Week 8 pick in the "Phipps Tavern 2026 Picks" Google Sheet (Week 8 tab), waited for the Apps Script cache window, hard-refreshed the live site, clicked the Week 8 tab — the pick rendered correctly.
+- Confirms the full pipeline is LIVE and working: Google Sheet (one tab per week) → Apps Script `/exec` JSON feed → site fetch/render. The "one pick flips the week from schedule-only to sheet-sourced" behavior worked as designed.
+- **Load speed question CLOSED:** user reports the site loads "very fast." No localStorage cache work needed — the earlier concern about slow loads does not reproduce. Decision: leave load path as-is (no cache layer added). REJECTED adding a localStorage cache (unnecessary; would add complexity for no measurable benefit).
+- Picks tracker is now considered feature-complete for the season: sheet-driven picks, live-week detection (green dot), clicked-week (blue box), path-to-win readability, clinch/elim flags derived from win-share enumeration (bug #2 fixed, HEAD 16fbdfc), dark-logo readability. Season-long maintenance = just entering picks in the sheet.
