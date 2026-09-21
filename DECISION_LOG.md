@@ -107,3 +107,21 @@ Sheet titled "Phipps Tavern 2026 Picks". Nick asked: (A) make all week tabs clic
 Nick will use the sheet all season → chose Apps Script over raw CSV+gids. Workflow: Nick picks via dropdowns in the sheet → Apps Script web app (doGet) publishes ALL weeks as ONE JSON URL (/exec) → picks site fetches that URL on load → picks auto-appear, NO git push / NO admin.html. Apps Script also: buildWeekSchedule(N) pulls the week's NFL matchups from ESPN into the tab (no hand-typing games), addDropdowns(N) sets per-game data-validation dropdowns, custom "Picks Tools" menu. Site swaps SHEET to a single jsonUrl reader (drives live + archive weeks), winners still from ESPN, fallback to picks.js+season.js (never blank), freeze tag rollback.
 LOGOS answer: dropdown itself stays text-only (Google limit), BUT the SITE already renders team logos next to picks — so a "SEA" pick shows the Seahawks logo on the site automatically. Optional =IMAGE() logo cell in-sheet is display-only bonus.
 Nick does once: paste Code.gs → deploy web app (authorize) → hand back /exec URL → edit chat wires + tests. Spec: `APPS_SCRIPT_SPEC.md`. Edit chat delivers full Code.gs + deploy steps + site reader.
+
+
+## 2026-08-13 — Google Sheet picks v3: Apps Script WEB APP (one JSON URL) — WORKS (/exec pending from Nick)
+Per APPS_SCRIPT_SPEC.md (chosen over CSV-per-gid because the sheet is a season-long workflow). Sheet holds one tab per week; a bound Apps Script web app (doGet) returns ALL weeks as JSON at one /exec URL; site fetches that single URL. Winners still from ESPN; picks.js+season.js fallback (never blanks). Rollback: good-picks-presheet → 34beda0.
+
+**PART 1 — Code.gs (new file, for Nick to paste into Extensions → Apps Script):**
+- `doGet()` → `ContentService` JSON `{season, players, weeks:{"N":{games:[{team1,team2,picks}], tiebreaker, tiebreakerGame}}}`; iterates only tabs matching /^week\s*(\d+)$/i; `readWeekSheet_()` parses header team1|team2|Nick..Bobby + TIEBREAKER row; tiebreaker game = last game row; skips malformed tabs.
+- `buildWeekSchedule(N)` → `UrlFetchApp` ESPN scoreboard (week N, seasontype 2, dates 2026), writes away=team1/home=team2 rows (sorted by kickoff) into a created/cleared "Week N" tab with header + blank pick cells + TIEBREAKER row; then calls addDropdowns(N).
+- `addDropdowns(N)` → per game row, DataValidation requireValueInList([team1,team2]) on the six player cells (skips TIEBREAKER row).
+- `onOpen()` → "Picks Tools" menu (build week…, add dropdowns…, URL note) via prompts. Verified Code.gs parses clean; has doGet/buildWeekSchedule/addDropdowns/onOpen/ContentService/UrlFetchApp/requireValueInList/.addToUi().
+
+**PART 2 — site reader (index.html):** replaced the CSV-per-gid SHEET block with `SHEET{jsonUrl:"",season,players}` + `sheetConfigured()` (on jsonUrl) + `normalizeWeek(raw,week)` (uppercases teams/picks, derives tiebreakerGame from last game if omitted, throws on empty) + `loadAllWeekTabs()` (fetch jsonUrl → JSON.parse → {week:obj}; HTML-body guard for unauthorized deploys; adopts players/season from payload; skips bad weeks). Removed parseCSV/parseWeekTab/fetchWeekTab/sheetCsvUrl. boot() + weekTabToArchive + enrichArchiveWithEspn UNCHANGED (loadAllWeekTabs keeps the same {week:obj} return shape) — newest week = live (window.PICKS), older = ARCHIVE graded via ESPN. Updated note/source-badge wording.
+
+**LOGOS confirmed:** teamChip() (logo renderer) unchanged, 10 render call sites; sheet picks flow into the same PICKS/ARCHIVE structures, so a text pick "SEA" auto-renders the Seahawks logo. (Sheet dropdowns are text-only — abbrevs — documented.)
+
+**Verified (node):** page JS parses clean; 9/9 presence checks (incl. CSV parser removed); no-URL → {} fallback; wired fake /exec → weeks 1+2 parsed, picks/tiebreaker preserved, abbrevs uppercased, W1 tiebreakerGame derived from last game; malformed week skipped while valid week survives; HTML/unauthorized body → {} fallback. get_diagnostics clean. Removed scratch.
+
+**PENDING (Nick):** paste Code.gs → deploy Web app (Execute as me, Access Anyone) → authorize → send /exec URL; I wire SHEET.jsonUrl + test live. Commit ndjunce/noreply. Blast radius: index.html sheet module + note; README rewrite; new Code.gs. Zero change to render/grade/Path-to-Win/ESPN/archive-render.
