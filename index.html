@@ -872,6 +872,24 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     };
   });
 
+  // ---- CLINCH-BY-ELIMINATION (bug fix) ----
+  // The per-player `clinched = cur > oppMax` check can miss a mathematically-decided leader while a
+  // tracked game is still undecided. But if EVERY OTHER player is eliminated, the remaining player
+  // has ALREADY WON — nobody left can catch them — regardless of any undecided games (incl. their
+  // own picks). Promote that player to clinched here. (Also promotes the strict guaranteed-min>max
+  // leader, already flagged in-map.) Only applies when there IS a clear survivor.
+  const nonElim = results.filter(r=>!r.eliminated);
+  if(nonElim.length===1 && results.length>1){
+    nonElim[0].clinched = true;                    // last player standing = winner
+  } else if(nonElim.length>1){
+    // fallback: promote a leader whose current correct already beats every rival's max possible
+    // (equivalent to the in-map check, re-asserted after the fact for safety).
+    nonElim.forEach(r=>{
+      const oppMax = Math.max(0, ...results.filter(q=>q!==r).map(q=>q.maxPossible));
+      if(r.correct > oppMax) r.clinched = true;
+    });
+  }
+
   // rank: clinched first, then by winPct desc (if available) else correct desc, eliminated last
   results.sort((a,b)=>{
     if(a.eliminated!==b.eliminated) return a.eliminated?1:-1;
