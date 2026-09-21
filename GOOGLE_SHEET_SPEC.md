@@ -14,10 +14,25 @@ A public Google Sheet can be read WITHOUT auth in a couple of ways; pick the sim
 - **Option C: Google Sheets API v4** — needs an API key (a mild secret) + the sheet shared readable. More power but
   more setup; only if A/B are too limiting. Prefer A/B (no secret) for a static GitHub Pages site.
 
-## Sheet layout (define a clear schema Nick fills in)
-One row per game, columns: week, team1, team2, then one column per player (Nick, Clyde, Chet, Henry, Riley, Bobby)
-holding that player's pick, plus a tiebreaker row/section. Keep it close to the current `picks.js` shape so the
-render layer barely changes. Document the exact expected columns in the sheet + a note on the site.
+## FREEZE POINT (safety)
+Current working site frozen at tag **`good-picks-presheet` → 34beda0** (pushed to origin). Build the sheet feature on
+the SAME repo; if anything breaks, `git reset --hard good-picks-presheet` restores the live site. The design is also
+self-recovering: picks.js stays as the automatic fallback, so a sheet failure never breaks the live page.
+
+## Sheet layout — CONCRETE SCHEMA (so Nick's sheet + the parser match exactly)
+One tab per approach; recommend ONE row per game. Proposed columns (header row must match exactly):
+```
+week | team1 | team2 | Nick | Clyde | Chet | Henry | Riley | Bobby
+```
+- `week` = integer (all rows for a week share it; or one sheet/tab per week — edit chat picks the simpler parse).
+- `team1`/`team2` = NFL abbreviations (e.g. NE, SEA) matching what the render/ESPN matching already uses.
+- Each player column = that player's pick for the game (an abbreviation matching team1 or team2), blank = no pick.
+- **Tiebreaker:** a dedicated row where `team1`="TIEBREAKER" (or a separate small block), with each player's numeric
+  predicted total in their column, plus the tiebreaker game teams. Edit chat: define the exact tiebreaker
+  convention and DOCUMENT it in the sheet (a header note row) so Nick fills it correctly.
+- Players list is fixed: Nick, Clyde, Chet, Henry, Riley, Bobby (same as current picks.js).
+- EDIT CHAT: after building, produce a TEMPLATE (either a sample CSV in the repo or exact instructions) so Nick can
+  create the Google Sheet in this precise layout, then publish it and hand back the URL.
 
 ## Behavior
 - On load, fetch the published sheet (Option A/B), parse into the same structure `window.PICKS` uses today, then
