@@ -160,3 +160,7 @@ Deployment is now public (Nick fixed access → Anyone). Verified /exec live: HT
 **HONEST STATE:** the sheet currently has games (real matchups, auto-filled) but picks are still BLANK / tiebreakers null for every week — nobody has entered picks yet. So the site now shows each week's matchups from the sheet with no highlighted picks until the group fills the sheet. That's correct, not a bug; leaderboard/paths populate as picks + ESPN winners come in.
 
 Commit ndjunce/noreply. Blast radius: index.html SHEET.jsonUrl one-liner only. Fallback path proven intact (freeze tag good-picks-presheet still valid).
+
+
+## 2026-09-16 — Picks site live from sheet; 2 fixes needed (live-week default + Week 2 blank override)
+Site wired to /exec + loading (weeks 1-10 clickable, Week 1 picks show). Nick found 2 issues: (1) page OPENS on Week 10 because live-week = highest sheet week, but Nick auto-filled SCHEDULES thru Week 10 → should open on the ACTUAL current NFL week (~2/3) instead; weeks beyond current = future schedule-only. (2) Week 2 picks not showing — Nick's Week 2 picks are in picks.js but the sheet's Week 2 tab has blank picks (schedule auto-filled, no picks entered) and is overriding picks.js with blanks. FIX: a sheet week with games but ALL-blank picks should NOT clobber committed picks — fall back to picks.js/season.js for that week (Nick won't re-enter Week 1/2). Result: Week 1+2 picks always show; future blank weeks show schedules only; page opens on current NFL week. Spec: APPS_SCRIPT_SPEC.md FIXES section. Edit chat to implement + verify.

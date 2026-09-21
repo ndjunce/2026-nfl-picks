@@ -73,3 +73,34 @@ FIX OPTIONS (edit chat, pick the cleanest):
    Make the function degrade gracefully, not throw.
 PRIORITY: the picks→site JSON flow (doGet) is the core and works — wire the site to the /exec URL first. The
 schedule auto-fill is secondary; fix via option 1/2/3 so it never hard-errors.
+
+
+## FIXES (2026-09-16) — live-week detection + Week 2 blank override
+Site is wired + loading from sheet (weeks 1-10 clickable). Two issues Nick sees live:
+
+### FIX 1 — open on the ACTUAL current NFL week, not the newest sheet week
+Problem: the site sets "live week" = the HIGHEST week number present in the sheet. But Nick auto-filled SCHEDULES
+through Week 10 (via buildWeekSchedule), so the site thinks Week 10 is live and OPENS THERE. The green-ring "live
+week" + default selected tab should be the REAL current NFL week (~Week 2/3 now), not the max sheet week.
+- FIX: determine the current NFL week from a real source (the site already knows it — the ESPN scoreboard / NFL
+  state gives current week; the OLD picks.js also had `week`). Use the ACTUAL current NFL week as LIVE_WEEK +
+  the default `selectedWeek` on load. Weeks in the sheet beyond the current week are FUTURE (schedule-only, clickable
+  but no picks yet), NOT "live".
+- So: default open tab = current NFL week; weeks < current = past/archive; weeks > current = future schedule.
+
+### FIX 2 — Week 2 picks not showing (blank sheet tab overrides picks.js)
+Problem: Week 1 shows picks, Week 2 does not. Nick's real Week 2 picks are in `picks.js`, but the sheet has a
+Week 2 tab with BLANK picks (games auto-filled, picks empty). The sheet's blank Week 2 is overriding the good
+picks.js data. Nick will NOT re-enter Week 1/2 picks.
+- FIX (pick the clean one): when a sheet week has games but ALL picks blank/empty, treat that week as NOT having
+  usable picks → fall back to picks.js/season.js for that week (so Week 2 shows the picks.js picks, Week 1 shows
+  season.js). Essentially: a schedule-only sheet week (no picks entered) should NOT clobber existing committed picks.
+- ALTERNATIVELY / ADDITIONALLY: transcribe Nick's Week 1 + Week 2 picks INTO the sheet once (from season.js Week 1 +
+  picks.js Week 2) so the sheet is the full source — but Nick said he won't redo them, so the FALLBACK approach
+  (blank sheet week → use committed picks) is preferred so nothing is lost and no manual re-entry.
+- Result: Week 1 + Week 2 picks always display (from sheet if entered, else from picks.js/season.js); future blank
+  weeks just show schedules.
+
+## Guardrails
+- Keep the sheet→site flow + fallback intact. Current NFL week drives the default view. Blank sheet weeks never
+  erase committed picks. Verify Week 2 shows its picks.js picks again and the page opens on the current week.
