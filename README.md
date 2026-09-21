@@ -58,52 +58,71 @@ you can publish.
 
 ---
 
-## 📄 Google Sheet picks (primary weekly input — no git push needed)
-The site can pull each week's picks **live from a published public Google Sheet** on load, so anyone with
-sheet access can enter picks and the site updates without a commit/deploy. `picks.js` stays as the
-**automatic fallback** — if the sheet is unreachable or malformed, the page falls back to the last
-committed `picks.js` and never blanks. `admin.html` also still works as a backup entry method.
+## 📄 Google Sheet picks — ONE TAB PER WEEK (primary weekly input, no git push)
+The site pulls picks **live from one public Google Sheet that holds the whole season, one tab per week**
+("Week 1", "Week 2", …) — mirroring the site's own week tabs. The **newest week tab** drives the live view;
+**older week tabs** fill the archived week tabs. Winners/results are **not** in the sheet — they come from
+ESPN exactly as today. `picks.js` (live) + `season.js` (archive) stay as the **automatic fallback**, so a
+sheet hiccup never blanks the page. `admin.html` still works as a backup entry method.
 
-### Step 1 — build the sheet in this EXACT layout
-Create a Google Sheet with **one row per game**. The header row must be **exactly** (case-insensitive,
-this order of columns doesn't matter but the names must match):
+Base sheet (already created, "Anyone with link → Viewer"):
+`1fr3FephcCutOiRaNB7yi78o9DCExXdYbV-CdC2gkqtw`
+
+### Step 1 — one tab per week, in this EXACT layout
+Each week is its own tab named **`Week 1`, `Week 2`, …**. Every tab uses **one row per game** with this
+header row (names must match; **no `week` column** — the tab *is* the week):
 
 ```
-week,team1,team2,Nick,Clyde,Chet,Henry,Riley,Bobby
+team1,team2,Nick,Clyde,Chet,Henry,Riley,Bobby
 ```
 
-- `week` — integer; every game row that week shares it (e.g. `2`).
-- `team1`, `team2` — NFL abbreviations, e.g. `DET`, `BUF` (same abbrevs the scoreboard uses: `WSH`, `LAR`, `LAC`, `LV`, `SF`, `TB`, `NYG`, `NYJ`, `NO`, `NE`, `KC`, `JAX`…).
+- `team1`, `team2` — NFL abbreviations, e.g. `DET`, `BUF` (same abbrevs the scoreboard uses:
+  `WSH`, `LAR`, `LAC`, `LV`, `SF`, `TB`, `NYG`, `NYJ`, `NO`, `NE`, `KC`, `JAX`…).
 - Each **player column** — that player's picked team for the game (must equal `team1` or `team2`); blank = no pick.
 - **Tiebreaker row** — a final row where **`team1` = `TIEBREAKER`**, `team2` left blank, and each player's
   column holds their **numeric predicted total points** for the tiebreaker game.
-- **Tiebreaker game convention:** the tiebreaker applies to the **LAST game row** in the sheet (the same
-  convention `picks.js` uses today). So put the game you want as the tiebreaker as the last game row,
-  then the `TIEBREAKER` totals row beneath it.
+- **Tiebreaker game convention:** the tiebreaker is the **LAST game row** on the tab (same convention the
+  site uses today). Put that game last, then the `TIEBREAKER` totals row beneath it.
 
-A ready-to-copy example is in the repo: **`SHEET_TEMPLATE.csv`** (it's the current Week 2 picks, so you
-can paste it into a sheet, publish, and see it match the live site exactly). Just paste it into a Google
-Sheet (File → Import → Upload → *replace current sheet*, or paste cells directly).
+Ready-to-paste examples are in the repo — **`SHEET_TEMPLATE_Week1.csv`** and **`SHEET_TEMPLATE_Week2.csv`**
+(the real Week 1 and Week 2 picks, so once wired they'll match the live site exactly). For each: open the
+matching tab, then **File → Import → Upload the CSV → "Replace current sheet"**, or just paste the cells.
 
-### Step 2 — publish it as CSV
-In the sheet: **File → Share → Publish to web → (Entire document or the picks tab) → CSV → Publish.**
-Copy the URL it gives you. It looks like:
+### Step 2 — set up the per-game DROPDOWNS (so you click, never type)
+On each tab, make the pick cells click-to-choose so there are no typos:
+1. Select a game's six pick cells (the `Nick…Bobby` cells on that game's row).
+2. **Data → Data validation → Add rule → Criteria: "Dropdown"**.
+3. Enter the two options = that game's **team abbreviations** (e.g. `DET` and `BUF`). Click **Done**.
+4. Repeat per game (or set one dropdown, then copy/paste the cell down a column and edit each game's two
+   options). Now every pick cell is a dropdown of just that game's two teams.
+
+**Honest limit:** Google Sheets dropdowns are **text only** — you can't put clickable team *logos* inside a
+dropdown, so the options are **abbreviations** (`NE`, `SEA`). (If you want, a separate `=IMAGE(...)` cell can
+show a logo based on the picked abbreviation, but that's just decoration — the site reads the abbreviation
+either way, dropdown or typed.)
+
+### Step 3 — grab each tab's `gid` and hand it to me
+Each tab has its own numeric **`gid`**. Open a week's tab and look at the browser address bar — the URL ends
+with `...#gid=1234567890`. That number is the tab's gid.
+
+**Send me, for each week tab, its number and gid**, e.g.:
 
 ```
-https://docs.google.com/spreadsheets/d/e/<long-id>/pub?gid=0&single=true&output=csv
+Week 1 → gid 0
+Week 2 → gid 1837465920
 ```
 
-Keep the sheet **published/public-readable** (it's just game picks, nothing sensitive).
-
-### Step 3 — hand the URL back
-Send me that published CSV URL and I'll paste it into `SHEET.csvUrl` in `index.html` and test it live.
-(Until then, `SHEET.csvUrl` is empty, so the site keeps using `picks.js` exactly as before.)
+I'll drop them into the `SHEET.weeks` map in `index.html` (`{ 1: "0", 2: "1837465920" }`) and test live.
+Until that map is filled, the site keeps using `picks.js` + `season.js` exactly as before. (You do **not**
+need to "Publish to web" for this method — the `export?format=csv&gid=…` URL works as long as the sheet is
+"Anyone with link → Viewer", which it already is.)
 
 ### Honest tradeoffs
-- **Pro:** no weekly git push; anyone with sheet edit access enters picks; instant updates.
-- **Con:** the sheet must stay published; and the parse is only as reliable as the sheet's format — a
-  renamed column or a typo'd abbreviation can make that week fail to parse (it then falls back to
-  `picks.js`). Keep the header row and abbreviations exactly as above.
+- **Pro:** no weekly git push; anyone with sheet edit access enters picks via dropdown; instant updates;
+  the whole season lives in one sheet (drives both the live week and the archived week tabs).
+- **Con:** the sheet must stay link-viewable; and the parse is only as reliable as the sheet's format — a
+  renamed column, a typo'd abbreviation, or a wrong gid makes that week fall back to `picks.js`/`season.js`.
+  Keep the header row + abbreviations exactly as above.
 - The git "receipt" trail is replaced by the **sheet's own version history** for sheet-entered weeks.
 
 ---

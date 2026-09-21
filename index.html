@@ -326,7 +326,7 @@
     <div class="games" id="games"></div>
   </div>
 
-  <div class="note">Live scores from ESPN's public scoreboard, updated in your browser. Picks load from a published Google Sheet when configured, with <code>picks.js</code> as automatic fallback. <span id="srcNote" class="muted"></span></div>
+  <div class="note">Live scores from ESPN's public scoreboard, updated in your browser. Picks load from a public Google Sheet (one tab per week) when configured, with <code>picks.js</code> + <code>season.js</code> as automatic fallback. <span id="srcNote" class="muted"></span></div>
 </div>
 
 <!-- picks.js = the current (live) week; season.js = archived past weeks (both drive the week tabs) -->
@@ -336,31 +336,38 @@
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 
 /* ============================================================================
-   GOOGLE SHEET PICKS SOURCE (primary weekly input; picks.js is the fallback).
-   On load we fetch a PUBLISHED public Google Sheet (File → Share → Publish to web
-   → CSV), parse it into the SAME window.PICKS structure the render/leaderboard/
-   Path-to-Win code already uses, and override picks.js. Keyless, CORS-friendly,
-   no backend. If the fetch/parse fails OR no URL is set, we keep picks.js so the
-   page NEVER blanks (same resilience as the ESPN score fetch).
+   GOOGLE SHEET PICKS SOURCE — ONE TAB PER WEEK (Option 2, Nick's choice).
+   The sheet holds the WHOLE SEASON: one tab per week ("Week 1", "Week 2", ...),
+   mirroring the site's week tabs. Each tab is PICKS-ONLY with columns:
+       team1 | team2 | Nick | Clyde | Chet | Henry | Riley | Bobby
+   (NO week column — the TAB is the week) plus a TIEBREAKER row at the bottom.
 
-   TO WIRE: publish your sheet as CSV and paste its URL into SHEET.csvUrl below.
-   The exact sheet layout + a sample CSV are in the repo: SHEET_TEMPLATE.csv and
-   the "Sheet setup" section of README. Header row MUST be exactly:
-     week,team1,team2,Nick,Clyde,Chet,Henry,Riley,Bobby
-   Tiebreaker = a row whose team1 cell is "TIEBREAKER"; team2 is unused; each
-   player's column holds their numeric predicted total for the tiebreaker game.
-   The tiebreaker GAME is the LAST real game row in the sheet (documented in the
-   template) — matching how picks.js sets tiebreakerGame today.
+   We read each tab as CSV via the per-tab export URL:
+       https://docs.google.com/spreadsheets/d/<SHEET_ID>/export?format=csv&gid=<GID>
+   Each tab has its own numeric gid (visible as gid=... in the address bar when
+   that tab is open). Fill SHEET.weeks below with week -> gid.
+
+   Winners/results are NOT in the sheet — they come from ESPN (live for the current
+   week, by-week for past weeks), exactly as the site grades today.
+   The CURRENT week's tab drives the live view (window.PICKS); PAST weeks' tabs
+   populate the archive (merged with season.js). If a tab fetch/parse fails or a
+   week's gid isn't set, we fall back to picks.js (live) + season.js (archive) —
+   the page NEVER blanks. Rollback tag: good-picks-presheet.
    ============================================================================ */
 const SHEET = {
-  // <<< PASTE YOUR PUBLISHED CSV URL HERE (leave "" to use picks.js only) >>>
-  // Looks like: https://docs.google.com/spreadsheets/d/e/<long-id>/pub?gid=0&single=true&output=csv
-  csvUrl: "",
-  season: 2026,                 // used with the sheet's week column (season isn't in the sheet)
+  id: "1fr3FephcCutOiRaNB7yi78o9DCExXdYbV-CdC2gkqtw",   // base sheet id (Anyone with link → Viewer)
+  season: 2026,
   players: ["Nick","Clyde","Chet","Henry","Riley","Bobby"],
+  // <<< week number -> that tab's gid (from gid=... in the tab's URL). Leave {} to use picks.js/season.js only. >>>
+  // e.g. weeks: { 1: "0", 2: "1837465920" }
+  weeks: {},
 };
+function sheetCsvUrl(gid){
+  return `https://docs.google.com/spreadsheets/d/${SHEET.id}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+}
+function sheetConfigured(){ return SHEET.id && SHEET.weeks && Object.keys(SHEET.weeks).length>0; }
 
-// Minimal RFC-4180-ish CSV parser (handles quoted fields, commas, CRLF). Returns array of rows (arrays).
+// Minimal RFC-4180-ish CSV parser (handles quoted fields, commas, CRLF, BOM). Returns array of rows (arrays).
 function parseCSV(text){
   const rows=[]; let row=[], field="", i=0, inQ=false;
   text = String(text).replace(/^\uFEFF/,"");   // strip BOM
@@ -380,19 +387,21 @@ function parseCSV(text){
   return rows.filter(r=>r.length && r.some(x=>String(x).trim()!==""));
 }
 
-// Parse published-CSV rows into the window.PICKS structure. Throws on a clearly-invalid sheet
-// (so the caller can fall back to picks.js). team1/team2/picks = uppercased NFL abbrevs.
-function parseSheetToPicks(csvText){
+// Parse ONE week-tab's CSV into a normalized week object:
+//   { week, games:[{team1,team2,picks}], tiebreakerGame, tiebreaker }
+// No `week` column — the caller supplies the week (the tab). team1/team2/picks uppercased.
+// Throws on a clearly-invalid tab so the caller can fall back per-week.
+function parseWeekTab(csvText, weekNum){
   const rows = parseCSV(csvText);
-  if(rows.length < 2) throw new Error("sheet has no data rows");
+  if(rows.length < 2) throw new Error("tab has no data rows");
   const header = rows[0].map(h=>String(h).trim());
-  const need = ["week","team1","team2",...SHEET.players];
+  const need = ["team1","team2",...SHEET.players];
   const idx = {}; need.forEach(col=>{
     const at = header.findIndex(h=>h.toLowerCase()===col.toLowerCase());
-    if(at<0) throw new Error(`sheet missing column "${col}"`);
+    if(at<0) throw new Error(`tab missing column "${col}"`);
     idx[col]=at;
   });
-  const games=[]; let tiebreaker=null; let week=null;
+  const games=[]; let tiebreaker=null;
   const up = s => String(s==null?"":s).trim().toUpperCase();
   for(let r=1;r<rows.length;r++){
     const cells=rows[r];
@@ -404,14 +413,13 @@ function parseSheetToPicks(csvText){
     }
     const t2 = String(cells[idx.team2]||"").trim();
     if(!t2) continue;                       // a game row needs both teams
-    if(week==null){ const w=parseInt(cells[idx.week],10); if(!isNaN(w)) week=w; }
     const picks={}; SHEET.players.forEach(p=>{ picks[p]=up(cells[idx[p]]); });
     games.push({ team1:up(t1), team2:up(t2), picks });
   }
-  if(!games.length) throw new Error("sheet has no game rows");
-  const tbg = games[games.length-1];        // convention: tiebreaker game = last game row
+  if(!games.length) throw new Error("tab has no game rows");
+  const tbg = games[games.length-1];        // convention: tiebreaker game = LAST game row
   return {
-    week: week||1, season: SHEET.season, players: SHEET.players.slice(),
+    week: weekNum, season: SHEET.season, players: SHEET.players.slice(),
     games,
     tiebreakerGame: { team1:tbg.team1, team2:tbg.team2 },
     tiebreaker: tiebreaker || {},
@@ -419,19 +427,65 @@ function parseSheetToPicks(csvText){
   };
 }
 
-// Fetch + parse the published sheet. Resolves to a PICKS object, or null on any failure.
-async function loadPicksFromSheet(){
-  if(!SHEET.csvUrl) return null;             // not wired yet -> use picks.js
+// Fetch + parse a single week's tab. Resolves to a week object, or null on any failure.
+async function fetchWeekTab(weekNum){
+  const gid = SHEET.weeks[weekNum];
+  if(gid==null || gid==="") return null;
   try{
-    const res = await fetch(SHEET.csvUrl, {cache:"no-store"});
-    if(!res.ok) throw new Error("sheet HTTP "+res.status);
+    const res = await fetch(sheetCsvUrl(gid), {cache:"no-store"});
+    if(!res.ok) throw new Error("tab HTTP "+res.status);
     const text = await res.text();
-    const picks = parseSheetToPicks(text);
-    return picks;
+    // A wrong/unpublished gid often returns an HTML login/error page, not CSV — guard against it.
+    if(/^\s*</.test(text)) throw new Error("tab did not return CSV (check gid / sharing)");
+    return parseWeekTab(text, weekNum);
   }catch(e){
-    console.warn("Google Sheet picks unavailable, falling back to picks.js:", e.message);
+    console.warn(`Google Sheet Week ${weekNum} tab unavailable:`, e.message);
     return null;
   }
+}
+
+// Load ALL configured week tabs in parallel. Returns { [week]: weekObj } for tabs that parsed OK.
+async function loadAllWeekTabs(){
+  if(!sheetConfigured()) return {};
+  const weeks = Object.keys(SHEET.weeks).map(Number).filter(n=>!isNaN(n));
+  const results = await Promise.all(weeks.map(async w=>[w, await fetchWeekTab(w)]));
+  const out = {};
+  results.forEach(([w,obj])=>{ if(obj) out[w]=obj; });
+  return out;
+}
+
+// Convert a parsed week tab into an ARCHIVE-shaped entry (picks only; winners/scores come from
+// ESPN later). Shape matches season.js: { week, games:[{team1,team2,picks}], tiebreaker }.
+function weekTabToArchive(wk){
+  return { week: wk.week, _source:"google-sheet",
+    games: wk.games.map(g=>({ team1:g.team1, team2:g.team2, picks:g.picks })),
+    tiebreaker: wk.tiebreaker || {} };
+}
+
+// Grade a sheet-sourced past week from ESPN: fetch that week's scoreboard and fill each game's
+// winner + scores (and the tiebreaker actual total) so renderArchivedWeek() can grade it exactly
+// like a season.js week. Mutates + returns the archive entry; on ESPN failure the entry keeps its
+// picks (renders as "not final yet"), never blanks.
+async function enrichArchiveWithEspn(entry){
+  try{
+    const url = `${ESPN}?week=${entry.week}&seasontype=2&dates=${SHEET.season}`;
+    const res = await fetch(url, {cache:"no-store"});
+    if(!res.ok) throw new Error("ESPN "+res.status);
+    const data = await res.json();
+    const idx = indexGames(data);                 // reuse the site's authoritative game index
+    entry.games.forEach(g=>{
+      const info = idx[mkey(g.team1, g.team2)];
+      if(info){
+        if(info.completed && info.winner) g.winner = info.winner.toUpperCase();
+        if(info.scores) g.scores = info.scores;
+      }
+    });
+    // tiebreaker actual = the LAST game's total once final (matches the site's tiebreaker convention)
+    const last = entry.games[entry.games.length-1];
+    if(last){ const info = idx[mkey(last.team1, last.team2)];
+      if(info && info.completed && info.total!=null) entry.tbActual = info.total; }
+  }catch(e){ console.warn(`ESPN grade for Week ${entry.week} failed:`, e.message); }
+  return entry;
 }
 // Smart adaptive polling: interval depends on whether games are live / today / done.
 const POLL_LIVE  = 50000;    // ~50s while any game is IN PROGRESS (catches in->post grading)
@@ -1426,36 +1480,55 @@ async function tick(){
 
 // boot
 async function boot(){
-  if(typeof PICKS==="undefined" && !SHEET.csvUrl){
+  if(typeof PICKS==="undefined" && !sheetConfigured()){
     document.getElementById("errbox").innerHTML =
       `<div class="err">picks.js didn't load. Make sure picks.js is in the same folder as index.html.</div>`;
     return;
   }
-  // PRIMARY source = published Google Sheet (if wired); FALLBACK = picks.js (committed).
-  // A sheet failure never blanks the page — we keep whatever picks.js already provided.
-  const sheetPicks = await loadPicksFromSheet();
-  if(sheetPicks){
-    window.PICKS = sheetPicks;               // override picks.js with the live sheet
-    if(window.__sheetNote){ /* noop */ }
+  // PRIMARY source = published Google Sheet, ONE TAB PER WEEK (if configured);
+  // FALLBACK = picks.js (live week) + season.js (archive). A sheet failure never blanks the page.
+  const tabs = await loadAllWeekTabs();                 // { week: weekObj } for tabs that parsed
+  const gotWeeks = Object.keys(tabs).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+
+  if(gotWeeks.length){
+    // Live week = the highest week tab that parsed (newest week entered). Its tab drives window.PICKS.
+    const liveW = gotWeeks[gotWeeks.length-1];
+    window.PICKS = tabs[liveW];
+    // Past week tabs -> ARCHIVE (sheet fills weeks; season.js takes precedence if it already has one).
+    for(const w of gotWeeks){
+      if(w===liveW) continue;
+      if(!ARCHIVE[w] || !(Array.isArray(ARCHIVE[w].games) && ARCHIVE[w].games.length)){
+        ARCHIVE[w] = weekTabToArchive(tabs[w]);         // picks only; grade via ESPN next
+      }
+    }
   }
+
   if(typeof PICKS==="undefined"){
     document.getElementById("errbox").innerHTML =
       `<div class="err">No picks available (sheet unreachable and picks.js missing).</div>`;
     return;
   }
+
   // finalize week state now that PICKS is settled (sheet may set a different current week)
   LIVE_WEEK = (window.PICKS && PICKS.week) || 1;
   selectedWeek = LIVE_WEEK;
-  // tiny source badge so it's obvious where this week's picks came from (sheet vs committed file)
+  const fromSheet = (PICKS._source==="google-sheet");
   const srcNote = document.getElementById("srcNote");
-  if(srcNote) srcNote.textContent = (PICKS._source==="google-sheet")
-    ? "picks: live Google Sheet" : "picks: picks.js (committed)";
+  if(srcNote) srcNote.textContent = fromSheet ? "picks: live Google Sheet (per-week tabs)" : "picks: picks.js (committed)";
 
   renderWeekBar();  // draw the Week 1..18 tabs (current week active, archived weeks clickable)
   render(null);     // instant paint: picks + leaderboard show immediately, before scores arrive
   tick();           // first fetch; tick() reschedules itself adaptively via scheduleNext()
-  // If the tab is hidden, the browser throttles timers anyway; when it regains focus, refresh promptly.
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && selectedWeek===LIVE_WEEK) tick(); });
+
+  // Grade any sheet-sourced PAST weeks from ESPN (winner + scores per week), then refresh the week
+  // bar + the current view if a graded week is showing. Runs after first paint so it never blocks.
+  const sheetPast = Object.keys(ARCHIVE).map(Number).filter(w=>w!==LIVE_WEEK && ARCHIVE[w] && ARCHIVE[w]._source==="google-sheet");
+  if(sheetPast.length){
+    await Promise.all(sheetPast.map(w=>enrichArchiveWithEspn(ARCHIVE[w])));
+    renderWeekBar();
+    if(selectedWeek!==LIVE_WEEK && ARCHIVE[selectedWeek]) renderArchivedWeek(ARCHIVE[selectedWeek]);
+  }
 }
 boot();
 </script>
