@@ -19,31 +19,41 @@ Current working site frozen at tag **`good-picks-presheet` → 34beda0** (pushed
 the SAME repo; if anything breaks, `git reset --hard good-picks-presheet` restores the live site. The design is also
 self-recovering: picks.js stays as the automatic fallback, so a sheet failure never breaks the live page.
 
-## ***UPDATE — OPTION 2: ALL-WEEKS in ONE sheet (Nick's choice)***
-Nick wants the ONE sheet to hold the WHOLE SEASON (all weeks), driving BOTH the current week AND the archived week
-tabs — mirroring the site's existing Week 1..18 tabs. This UNIFIES what's currently split across picks.js (live week)
-+ season.js (archive) into a single sheet source.
-- **Layout: ONE tab, ALL rows** (recommended over one-tab-per-week — single CSV URL, simplest). Every game for every
-  week is a row; the `week` column distinguishes them. Nick keeps adding rows as weeks happen.
-- **Parser must:** read ALL rows, GROUP by `week`. For each week build the picks structure. The site then:
-  - Uses the CURRENT NFL week's rows as the live week (ESPN live scores as now).
-  - Uses PAST weeks' rows to populate the archived week tabs (replacing/augmenting season.js — see fallback note).
-  - Future weeks with no rows yet → tab shows "not entered yet" (as now).
-- **Live sheet URL (Nick's, confirmed real Google Sheet):**
-  `https://docs.google.com/spreadsheets/d/1fr3FephcCutOiRaNB7yi78o9DCExXdYbV-CdC2gkqtw/export?format=csv`
-  (Nick set/confirm "Anyone with the link → Viewer" so the export CSV is publicly fetchable.)
-- **Tiebreaker per week:** the TIEBREAKER row must carry the `week` too, so each week's tiebreaker is grouped correctly.
-- **Winners/results:** the sheet holds PICKS (+ tiebreaker). Game WINNERS still come from ESPN live/finalized (current
-  week) and, for past weeks, from ESPN by that week — same grading the site already does. The sheet is picks-only;
-  it does NOT need a winner column (don't make Nick enter results).
-- **FALLBACK (keep it safe):** if the sheet fetch/parse fails, fall back to the existing picks.js (live week) +
-  season.js (archive) exactly as today. Never blank. The freeze tag + these fallbacks = fully reversible.
+## ***UPDATE — OPTION 2: ALL-WEEKS, ONE TAB PER WEEK (Nick's choice)***
+Nick wants the sheet to hold the WHOLE SEASON with ONE TAB PER WEEK (Week 1 tab, Week 2 tab, ...), mirroring the
+site's Week 1..18 tabs. Drives BOTH the current week (live) AND archived week tabs. Unifies picks.js + season.js
+into one sheet source.
+- **Layout: ONE TAB PER WEEK.** Tab named e.g. "Week 1", "Week 2". Each tab uses the same columns:
+  `team1 | team2 | Nick | Clyde | Chet | Henry | Riley | Bobby` (no `week` column needed — the TAB is the week),
+  plus a TIEBREAKER row at the bottom of each tab.
+- **Reading tabs as CSV:** each tab has its own numeric `gid`. Per-tab CSV URL =
+  `https://docs.google.com/spreadsheets/d/1fr3FephcCutOiRaNB7yi78o9DCExXdYbV-CdC2gkqtw/export?format=csv&gid=<GID>`
+  (base sheet id confirmed: `1fr3FephcCutOiRaNB7yi78o9DCExXdYbV-CdC2gkqtw`; Nick set "Anyone with link → Viewer").
+  - EDIT CHAT: build a `SHEET.weeks` config mapping week number → gid (Nick provides each tab's gid from its URL when
+    he opens that tab — the `gid=` in the address bar). OR, better, discover tabs via the gviz/sheets metadata if
+    feasible keylessly; if not, the week→gid config map is the reliable path. Decide + document what Nick must supply.
+  - Fetch the CURRENT week's tab for live; fetch past weeks' tabs to populate archive tabs; missing tab → "not entered yet."
+- **Winners/results:** sheet is PICKS-only (+ tiebreaker). Winners come from ESPN (live/finalized current week; by-week
+  for past weeks) — same grading as now. NO winner column; don't make Nick enter results.
+- **FALLBACK:** if a tab fetch/parse fails, fall back to picks.js (live) + season.js (archive) as today. Never blank.
+  Freeze tag good-picks-presheet → 34beda0 = rollback.
 
-## Nick to do (once): put Week 1 rows into the sheet too
-For a full-season sheet, Week 1's games+picks should be added as rows (week=1) alongside Week 2, so the archive tab
-reads from the sheet. (Week 1 data exists in season.js already — can be transcribed, or the edit chat can generate an
-updated SHEET_TEMPLATE.csv containing BOTH weeks for Nick to re-import.) EDIT CHAT: regenerate the template with
-Week 1 + Week 2 rows so Nick just re-imports the full-season starter.
+## FANCY DATA ENTRY — dropdowns (Nick sets up in the Sheet; site just reads the result)
+Nick wants to pick teams via dropdown, not typing. Google Sheets DATA VALIDATION does this (a you-set-up-in-sheet
+feature, not site code):
+- Select a game's pick cells → Data → Data validation → Dropdown → list the valid options → Done. Cells become a
+  click-to-pick dropdown; no typos.
+- Best practice: each game's pick dropdown offers just that game's two team abbreviations (team1/team2).
+- HONEST LIMIT: Google Sheets dropdowns are TEXT ONLY — you CANNOT put clickable team-LOGO images inside a dropdown.
+  So dropdowns = team ABBREVIATIONS (NE, SEA). (A separate `=IMAGE(...)` cell could show a logo based on the pick, but
+  that's display-only decoration; the site reads the abbreviation regardless. Not required.)
+- The site reads whatever text the cell ends up holding (the abbreviation) — dropdowns don't change the parser.
+- EDIT CHAT: provide short instructions (in README) for Nick to add per-game dropdowns; optionally generate the
+  validation-friendly template. The parser must still accept plain abbreviations (dropdown or typed).
+
+## Nick to do (once): Week 1 tab too + tab gids
+Add a "Week 1" tab (Week 1 games+picks, from season.js) so the archive reads from the sheet. Edit chat regenerates a
+template (Week 1 + Week 2) and tells Nick how to grab each tab's `gid` for the week→gid config.
 
 ## Sheet layout — CONCRETE SCHEMA (so Nick's sheet + the parser match exactly)
 One tab per approach; recommend ONE row per game. Proposed columns (header row must match exactly):
