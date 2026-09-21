@@ -164,3 +164,15 @@ Commit ndjunce/noreply. Blast radius: index.html SHEET.jsonUrl one-liner only. F
 
 ## 2026-09-16 — Picks site live from sheet; 2 fixes needed (live-week default + Week 2 blank override)
 Site wired to /exec + loading (weeks 1-10 clickable, Week 1 picks show). Nick found 2 issues: (1) page OPENS on Week 10 because live-week = highest sheet week, but Nick auto-filled SCHEDULES thru Week 10 → should open on the ACTUAL current NFL week (~2/3) instead; weeks beyond current = future schedule-only. (2) Week 2 picks not showing — Nick's Week 2 picks are in picks.js but the sheet's Week 2 tab has blank picks (schedule auto-filled, no picks entered) and is overriding picks.js with blanks. FIX: a sheet week with games but ALL-blank picks should NOT clobber committed picks — fall back to picks.js/season.js for that week (Nick won't re-enter Week 1/2). Result: Week 1+2 picks always show; future blank weeks show schedules only; page opens on current NFL week. Spec: APPS_SCRIPT_SPEC.md FIXES section. Edit chat to implement + verify.
+
+
+## 2026-09-16 — Two fixes: real current-NFL-week green dot + blank-sheet-week fallback — WORKS
+Per APPS_SCRIPT_SPEC.md FIXES section. index.html boot only.
+
+**FIX 1 — LIVE_WEEK = real current NFL week (green dot), not max sheet week.** Auto-filling schedules through Week 10 had made LIVE_WEEK=10 (green dot on wk 10). Added `fetchCurrentNflWeek()` → ESPN scoreboard (no week= param) reads `data.week.number` (+season.year), fallback to committed picks.js.week then 1. boot sets LIVE_WEEK from that; selectedWeek (blue) defaults to LIVE_WEEK on first load so the page OPENS on the current week; clicks still move blue (selectWeek unchanged); green dot fixed on current week. Weeks > current = future schedule-only (clickable). Also adopts ESPN season into SHEET.season.
+
+**FIX 2 — schedule-only sheet week must NOT clobber committed picks.** Added `weekHasPicks(wk)` = any game has a non-blank pick. boot logic: live window.PICKS = sheet-with-picks[LIVE_WEEK] → else committed picks.js if it IS LIVE_WEEK → else sheet schedule-only[LIVE_WEEK] → else committed. ARCHIVE per non-live week: sheet-with-picks wins; else keep committed season.js (blank sheet week does NOT overwrite); else sheet schedule-only when nothing committed. So Week 1 (season.js) + Week 2 (picks.js) keep showing their real picks even though the sheet has blank auto-filled tabs for them.
+
+**Verified (jsdom, exact failure scenario: current wk=2 mocked from ESPN state, sheet weeks 1-10 ALL blank/schedule-only, picks.js=wk2, season.js=wk1):** green/live dot = week 2 (not 10); blue/active = week 2 on open; weeks 1-10 all clickable; live window.PICKS = picks.js wk2 with REAL picks (BUF...), games pane shows DET/BUF (committed) NOT the blank AAA/BBB sheet; source badge "picks: picks.js (committed)". get_diagnostics clean. Removed scratch + jsdom.
+
+Commit ndjunce/noreply. Blast radius: index.html boot week-selection + 2 helpers (fetchCurrentNflWeek, weekHasPicks). Sheet→site flow + fallback intact; freeze tag good-picks-presheet still valid.

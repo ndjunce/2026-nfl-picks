@@ -414,6 +414,27 @@ async function loadAllWeekTabs(){
   }
 }
 
+// Does this parsed week actually have picks entered? (Auto-filled schedule tabs have games but ALL
+// picks blank — those must NOT clobber committed picks.js/season.js; they're schedule-only.)
+function weekHasPicks(wk){
+  if(!wk || !Array.isArray(wk.games)) return false;
+  return wk.games.some(g => Object.values(g.picks||{}).some(v => v && String(v).trim()!==""));
+}
+
+// The REAL current NFL week, from ESPN's scoreboard (no week= param -> current). Falls back to null
+// on failure so the caller can use a committed default. Sets both week + season when available.
+async function fetchCurrentNflWeek(){
+  try{
+    const res = await fetch(`${ESPN}?_=${Date.now()}`, {cache:"no-store"});
+    if(!res.ok) throw new Error("ESPN "+res.status);
+    const data = await res.json();
+    const wk = data && data.week && data.week.number;
+    const seasonYr = data && data.season && data.season.year;
+    if(wk) return { week: Number(wk), season: seasonYr || null };
+    return null;
+  }catch(e){ console.warn("current NFL week lookup failed:", e.message); return null; }
+}
+
 // Convert a parsed week tab into an ARCHIVE-shaped entry (picks only; winners/scores come from
 // ESPN later). Shape matches season.js: { week, games:[{team1,team2,picks}], tiebreaker }.
 function weekTabToArchive(wk){
@@ -1445,23 +1466,42 @@ async function boot(){
       `<div class="err">picks.js didn't load. Make sure picks.js is in the same folder as index.html.</div>`;
     return;
   }
+  // Committed fallbacks captured up front so a blank/absent sheet week never clobbers them.
+  const committedPicks = (typeof PICKS!=="undefined") ? PICKS : null;   // picks.js (its own week)
+
   // PRIMARY source = Apps Script web app JSON (all weeks in one URL, if configured);
   // FALLBACK = picks.js (live week) + season.js (archive). A sheet failure never blanks the page.
   const tabs = await loadAllWeekTabs();                 // { week: weekObj } parsed from the JSON
-  const gotWeeks = Object.keys(tabs).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+  // NOTE: only weeks with ACTUAL picks entered count as usable sheet data (see weekHasPicks). A
+  // schedule-only (all-blank) tab must NOT override committed picks — it's just a future/unfilled week.
 
-  if(gotWeeks.length){
-    // Live week = the highest week tab that parsed (newest week entered). Its tab drives window.PICKS.
-    const liveW = gotWeeks[gotWeeks.length-1];
-    window.PICKS = tabs[liveW];
-    // Past week tabs -> ARCHIVE (sheet fills weeks; season.js takes precedence if it already has one).
-    for(const w of gotWeeks){
-      if(w===liveW) continue;
-      if(!ARCHIVE[w] || !(Array.isArray(ARCHIVE[w].games) && ARCHIVE[w].games.length)){
-        ARCHIVE[w] = weekTabToArchive(tabs[w]);         // picks only; grade via ESPN next
-      }
-    }
-  }
+  // FIX 1: LIVE_WEEK = the REAL current NFL week (green dot), NOT the highest sheet tab.
+  const nfl = await fetchCurrentNflWeek();
+  LIVE_WEEK = (nfl && nfl.week)
+            || (committedPicks && committedPicks.week)     // pre-sheet the site used picks.js.week
+            || 1;
+  if(nfl && nfl.season) SHEET.season = nfl.season;
+
+  // Choose the LIVE week's data (window.PICKS): sheet-with-picks for LIVE_WEEK > committed picks.js
+  // (if it's that same week) > sheet schedule-only for LIVE_WEEK (games, no picks) > committed.
+  if(tabs[LIVE_WEEK] && weekHasPicks(tabs[LIVE_WEEK])){
+    window.PICKS = tabs[LIVE_WEEK];                        // real sheet picks for the current week
+  } else if(committedPicks && committedPicks.week===LIVE_WEEK){
+    window.PICKS = committedPicks;                         // committed picks.js is this week -> keep it
+  } else if(tabs[LIVE_WEEK]){
+    window.PICKS = tabs[LIVE_WEEK];                        // schedule-only current week (blank picks)
+  } // else: keep committedPicks as-is (window.PICKS already = picks.js)
+
+  // ARCHIVE (past + future weeks): sheet-with-picks wins; else keep season.js; else sheet schedule-only.
+  // A blank sheet week never overwrites an existing committed (season.js) archive entry.
+  Object.keys(tabs).map(Number).filter(n=>!isNaN(n) && n!==LIVE_WEEK).forEach(w=>{
+    const t = tabs[w];
+    if(weekHasPicks(t)){
+      ARCHIVE[w] = weekTabToArchive(t);                   // sheet has real picks -> use + grade via ESPN
+    } else if(!ARCHIVE[w] || !(Array.isArray(ARCHIVE[w].games) && ARCHIVE[w].games.length)){
+      ARCHIVE[w] = weekTabToArchive(t);                   // schedule-only, but nothing committed here -> show schedule
+    } // else: committed season.js entry stays (blank sheet week does NOT clobber it)
+  });
 
   if(typeof PICKS==="undefined"){
     document.getElementById("errbox").innerHTML =
@@ -1469,10 +1509,9 @@ async function boot(){
     return;
   }
 
-  // finalize week state now that PICKS is settled (sheet may set a different current week)
-  LIVE_WEEK = (window.PICKS && PICKS.week) || 1;
+  // FIX 1: on first load the blue (selectedWeek) opens on the current NFL week; clicks move it after.
   selectedWeek = LIVE_WEEK;
-  const fromSheet = (PICKS._source==="google-sheet");
+  const fromSheet = (PICKS._source==="google-sheet") && weekHasPicks(PICKS);
   const srcNote = document.getElementById("srcNote");
   if(srcNote) srcNote.textContent = fromSheet ? "picks: live Google Sheet (Apps Script)" : "picks: picks.js (committed)";
 
