@@ -394,21 +394,29 @@ function decideWeek(wk){
     graded.forEach(wr=>{ byWeek[wr.week] = wr; });
   }
 
-  // the LIVE week: prefer a sheet-with-picks live week (already graded above); else grade committed
-  // picks.js live so the current week is never missing even when the sheet has no picks for it yet.
-  const liveSheet = feedLive && sheetWeeks[liveWeek] && weekHasPicks(sheetWeeks[liveWeek]);
+  // Committed picks.js ALWAYS contributes its own week (whatever week that is), independent of the
+  // live-week logic. Per-week precedence: (1) sheet week WITH real picks (graded above) > (2) season.js
+  // entry > (3) window.PICKS for its week > (4) sheet schedule-only/skip. So we fill byWeek[PICKS.week]
+  // only when that week isn't already a REAL picks-bearing entry — a sheet-with-picks or a season.js
+  // entry for the same week is NOT overwritten, but a missing week IS filled (fixes Week 2 vanishing:
+  // Week 2 lives only in picks.js, its sheet tab is blank, and the live week is now past 2).
   let cur = null;
-  if(liveSheet){
-    cur = byWeek[liveWeek] || null;                   // graded sheet live week
-    if(cur) cur.live = true;
-  } else if(window.PICKS && PICKS.week === liveWeek){
-    cur = await currentWeekResult();                  // committed picks.js live
-    if(cur) byWeek[cur.week] = cur;
-  } else if(window.PICKS){
-    // committed picks.js is for a different week — still grade it so its week shows
-    cur = await currentWeekResult();
-    if(cur && !byWeek[cur.week]) byWeek[cur.week] = cur;
+  if(window.PICKS && PICKS.games){
+    const graded = await currentWeekResult();         // grade picks.js via ESPN (its own PICKS.week)
+    if(graded){
+      const wkNum = graded.week;
+      const existing = byWeek[wkNum];
+      // a sheet-with-picks entry has _source "google-sheet"; a season.js entry is a committed archive.
+      // Treat an existing entry as "real" (don't overwrite) if it exists at all for that week — those
+      // are the sheet-with-picks (graded) or season.js entries, both higher precedence than picks.js.
+      if(!existing) byWeek[wkNum] = graded;
+      cur = byWeek[wkNum];
+    }
   }
+  // mark the live week (for the "in progress" subhead) if we have an entry for it
+  const liveSheet = feedLive && sheetWeeks[liveWeek] && weekHasPicks(sheetWeeks[liveWeek]);
+  if(liveSheet && byWeek[liveWeek]){ byWeek[liveWeek].live = true; cur = byWeek[liveWeek]; }
+  else if(cur && cur.week !== liveWeek){ /* committed picks.js is a non-live week — keep it, no live flag */ }
 
   const weeks = Object.values(byWeek).sort((a,b)=>a.week-b.week);
   weeks.sort((a,b)=>a.week-b.week);
@@ -553,28 +561,59 @@ function decideWeek(wk){
     const accOf = r => { const n=r.w+r.l; return n? Math.round(100*r.w/n):0; };
     const leanPct = o => o.n? Math.round(100*o.w/o.n):0;
 
+    // All entries sharing the TOP value of keyFn (so ties aren't hidden by picking one arbitrarily).
+    // Returns [] when the pool is empty. Caller renders the whole tied group.
+    function topTiedBy(arr, keyFn){
+      if(!arr.length) return [];
+      const top = Math.max(...arr.map(keyFn));
+      return arr.filter(x=>keyFn(x)===top);
+    }
+    const TIE_CAP = 4;   // show up to 4 tied teams inline, then "+N more" (still signals the tie)
+    // Render a tendency line for a GROUP of tied teams that all share the same displayed record.
+    // sharedRec = the "2-0 each" style suffix when every tied team has the same w-l; else per-team record.
+    function tieChip(label, group, cls, extraFn){
+      if(!group.length) return "";
+      const n = group[0].n;                                   // sample size (same ranking key => may differ in acc)
+      const sameRec = group.every(x=>x.w===group[0].w && x.l===group[0].l);
+      const shown = group.slice(0, TIE_CAP);
+      const more = group.length - shown.length;
+      let teamsHtml;
+      if(sameRec){
+        teamsHtml = shown.map(x=>`${teamLogo(x.t)}${x.t}`).join(", ")
+          + (more>0?` <span class="muted">+${more} more</span>`:"")
+          + ` <span class="${cls}">${recOf(group[0])}${group.length>1?" each":""}</span>`
+          + (extraFn?` <span class="${cls}">${extraFn(group[0])}</span>`:"");
+      } else {
+        // same ranking key but different records -> list each with its own record
+        teamsHtml = shown.map(x=>`${teamLogo(x.t)}${x.t} <span class="${cls}">${recOf(x)}${extraFn?" "+extraFn(x):""}</span>`).join(", ")
+          + (more>0?` <span class="muted">+${more} more</span>`:"");
+      }
+      const nTxt = n<MIN_N ? ` <span class="lown">· low sample (${n})</span>` : ` <span class="muted">· ${n} pick${n===1?"":"s"}</span>`;
+      return `<span class="tt-item"><span class="k">${label}</span> ${teamsHtml}${nTxt}</span>`;
+    }
+
     function playerCard(p){
       const a=T[p]; if(!a.picks) return "";
       const backArr=Object.entries(a.back).map(([t,r])=>({t,...r,n:r.w+r.l,acc:accOf(r)}));
       const fadeArr=Object.entries(a.fade).map(([t,r])=>({t,...r,n:r.w+r.l,acc:accOf(r)}));
-      // most-picked (by count), honest N
-      const mostPicked=backArr.slice().sort((x,y)=>y.n-x.n)[0];
-      // best / worst team by accuracy among teams at/above MIN_N (so 1-game flukes don't win)
-      const qualified=backArr.filter(x=>x.n>=MIN_N);
-      const best=qualified.slice().sort((x,y)=> y.acc-x.acc || y.n-x.n)[0];
-      const worst=qualified.slice().sort((x,y)=> x.acc-y.acc || y.n-x.n)[0];
-      // who they fade most (picked against most often)
-      const fadedMost=fadeArr.slice().sort((x,y)=>y.n-x.n)[0];
+      // most-picked (by count) — ALL teams tied at the top count
+      const mostPicked = topTiedBy(backArr, x=>x.n);
+      // best / worst team by accuracy among teams at/above MIN_N (so 1-game flukes don't win) — all ties
+      const qualified = backArr.filter(x=>x.n>=MIN_N);
+      const best  = topTiedBy(qualified, x=>x.acc);
+      const worst = topTiedBy(qualified, x=>-x.acc);          // lowest accuracy = top of the "worst" ranking
+      // who they fade most (picked against most often) — all teams tied at the top fade count
+      const fadedMost = topTiedBy(fadeArr, x=>x.n);
       const overallAcc=Math.round(100*a.correct/a.picks);
 
-      const chip=(label,abbr,rec,cls,n)=> `<span class="tt-item"><span class="k">${label}</span> ${teamLogo(abbr)}${abbr} `
-        +`<span class="${cls}">${rec}</span>${n<MIN_N?` <span class="lown">· low sample (${n})</span>`:` <span class="muted">· ${n} pick${n===1?"":"s"}</span>`}</span>`;
-
       const parts=[];
-      parts.push(chip("Most-picked", mostPicked.t, recOf(mostPicked), "trust", mostPicked.n));
-      if(best && best.t!==mostPicked.t || (best && qualified.length>1)) parts.push(chip("Best team", best.t, `${recOf(best)} · ${best.acc}%`, "trust", best.n));
-      if(worst && (worst.l>worst.w)) parts.push(chip("Worst team", worst.t, `${recOf(worst)} · ${worst.acc}%`, "krypt", worst.n));
-      if(fadedMost) parts.push(chip("Fades most", fadedMost.t, recOf(fadedMost), "muted2", fadedMost.n));
+      if(mostPicked.length) parts.push(tieChip("Most-picked", mostPicked, "trust"));
+      // show Best team when it's meaningful (more than one qualified team, or it differs from most-picked)
+      const mpTeams = new Set(mostPicked.map(x=>x.t));
+      if(best.length && (qualified.length>1 || !best.every(x=>mpTeams.has(x.t)))) parts.push(tieChip("Best team", best, "trust", x=>`· ${x.acc}%`));
+      // worst only when the top-of-worst actually has a losing record
+      if(worst.length && worst[0].l>worst[0].w) parts.push(tieChip("Worst team", worst, "krypt", x=>`· ${x.acc}%`));
+      if(fadedMost.length) parts.push(tieChip("Fades most", fadedMost, "muted2"));
       // favorite / underdog lean (only if we had odds for enough games)
       if(a.fav.n+a.dog.n>0){
         const favTxt = a.fav.n? `favorites ${a.fav.w}/${a.fav.n} (${leanPct(a.fav)}%)` : "";
@@ -608,7 +647,6 @@ function decideWeek(wk){
           <select id="ttSort">
             <option value="acc">Accuracy ↓</option>
             <option value="picks">Pick count ↓</option>
-            <option value="player">Player A–Z</option>
           </select></label>
       </div>
       <div class="tt-list" id="ttList"></div>
@@ -619,12 +657,13 @@ function decideWeek(wk){
       const fp=document.getElementById("ttPlayer").value;
       const ft=document.getElementById("ttTeam").value.toUpperCase();
       const sort=document.getElementById("ttSort").value;
+      // start in canonical league order (Nick, Clyde, Chet, Henry, Riley, Bobby), never alphabetical
       let list=PLAYERS.filter(p=>T[p].picks>0);
       if(fp) list=list.filter(p=>p===fp);
       if(ft) list=list.filter(p=> (T[p].back[ft] || T[p].fade[ft]));   // player interacted with that team
       if(sort==="acc") list.sort((x,y)=> (T[y].correct/Math.max(1,T[y].picks)) - (T[x].correct/Math.max(1,T[x].picks)));
       else if(sort==="picks") list.sort((x,y)=> T[y].picks - T[x].picks);
-      else list.sort((x,y)=> PLAYERS.indexOf(x)-PLAYERS.indexOf(y));   // player order
+      // (no "player A–Z" sort — default stays the league order above)
       ttList.innerHTML = list.length ? list.map(playerCard).join("")
         : `<div class="muted" style="font-size:12.5px;padding:8px">No players match that filter yet.</div>`;
     }
