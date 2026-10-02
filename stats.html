@@ -47,6 +47,7 @@
   .badge{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;margin-left:5px;vertical-align:middle}
   .b-out{background:rgba(255,207,63,.16);color:var(--gold);border:1px solid var(--gold)}
   .b-tb{background:rgba(74,168,255,.16);color:var(--blu);border:1px solid var(--blu)}
+  .b-prog{background:rgba(143,156,176,.16);color:var(--mut);border:1px solid var(--mut)}
   .wk-list{display:flex;flex-direction:column;gap:8px}
   .wk{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;
       background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:13.5px}
@@ -303,8 +304,11 @@ function archiveToWeekResult(entry){
   const games=(entry.games||[]).filter(g=>g.winner).map(g=>({
     team1:g.team1, team2:g.team2, winner:String(g.winner).toUpperCase(),
     picks:g.picks, favAbbr:g.favAbbr||null, homeAbbr:g.homeAbbr||null }));
+  const totalGames=(entry.games||[]).length;
+  const finalGames=games.length;                       // games with a winner = final
   return { week: entry.week, results, tiebreaker: entry.tiebreaker||{},
-    tbActual: entry.tbActual!=null?entry.tbActual:null, games, _source:"google-sheet" };
+    tbActual: entry.tbActual!=null?entry.tbActual:null, games, _source:"google-sheet",
+    totalGames, finalGames, complete: totalGames>0 && finalGames>=totalGames };
 }
 
 // Grade ONE week's PICKS object (shape {week,games,tiebreaker,tiebreakerGame}) live from ESPN.
@@ -333,16 +337,36 @@ async function gradePicksLive(P){
     return (info&&info.completed&&info.winner)
       ? { team1:g.team1, team2:g.team2, winner:info.winner.toUpperCase(), picks:g.picks,
           favAbbr:info.favAbbr||null, homeAbbr:info.homeAbbr||null } : null; }).filter(Boolean);
+  const totalGames=P.games.length;
+  const finalGames=games.length;                       // games we graded as final (winner known)
   return { week: P.week, results, tiebreaker: P.tiebreaker||{}, tbActual, games,
-           live:true, noneFinal: !anyFinal, _source: P._source || "committed" };
+           live:true, noneFinal: !anyFinal, _source: P._source || "committed",
+           totalGames, finalGames, complete: totalGames>0 && finalGames>=totalGames };
 }
 // Back-compat shim: current week from committed picks.js (fallback path).
 async function currentWeekResult(){ return gradePicksLive(window.PICKS); }
 
+// Does a week-result object have REAL graded picks (some player with w+l>0)? A sheet tab that was
+// schedule-auto-filled but has blank/no-matching picks produces a PRESENT-but-blank entry (zero graded
+// results) — that must NOT block committed picks.js from filling the week.
+function hasGradedResults(wkObj){
+  if(!wkObj || !wkObj.results) return false;
+  return PLAYERS.some(p=> wkObj.results[p] && (wkObj.results[p].w + wkObj.results[p].l) > 0);
+}
+
 // Decide a week's winner: most correct = outright; tie -> tiebreaker (closest to actual); else TIED.
+// A week is only AWARDED once COMPLETE (all its games final). An in-progress week (some games still
+// pending) returns type "incomplete" — it shows live standings/tendencies from its final games but is
+// NEVER declared won and does NOT count toward weeks-won / streaks.
 function decideWeek(wk){
   const graded = PLAYERS.some(p=>wk.results&&wk.results[p]&&(wk.results[p].w+wk.results[p].l)>0);
   if(!graded) return { winners:[], type:"none", topW:0 };
+  // completeness gate: if the week object carries game counts and isn't complete, it's in progress.
+  // (complete===undefined -> a committed season.js week with no counts = treated as a finished archive.)
+  if(wk.complete===false){
+    return { winners:[], type:"incomplete", topW:0,
+             finalGames: wk.finalGames||0, totalGames: wk.totalGames||0 };
+  }
   const topW = Math.max(...PLAYERS.map(p=>(wk.results[p]||{w:0}).w));
   const top = PLAYERS.filter(p=>(wk.results[p]||{w:0}).w===topW);
   if(top.length===1) return { winners:top, type:"outright", topW };
@@ -406,17 +430,19 @@ function decideWeek(wk){
     if(graded){
       const wkNum = graded.week;
       const existing = byWeek[wkNum];
-      // a sheet-with-picks entry has _source "google-sheet"; a season.js entry is a committed archive.
-      // Treat an existing entry as "real" (don't overwrite) if it exists at all for that week — those
-      // are the sheet-with-picks (graded) or season.js entries, both higher precedence than picks.js.
-      if(!existing) byWeek[wkNum] = graded;
+      // Fill from picks.js when there's NO existing entry OR the existing one has no REAL graded results.
+      // The live bug: the sheet feed yields a present-but-blank Week 2 (schedule auto-filled, picks blank
+      // or non-matching) -> existing is truthy but has zero graded results, so the old `!existing` guard
+      // let it block picks.js and Week 2 vanished. A sheet/season.js entry that ACTUALLY has graded
+      // results is still NOT overwritten (precedence: real sheet/season.js > committed picks.js).
+      if(!existing || !hasGradedResults(existing)) byWeek[wkNum] = graded;
       cur = byWeek[wkNum];
     }
   }
-  // mark the live week (for the "in progress" subhead) if we have an entry for it
-  const liveSheet = feedLive && sheetWeeks[liveWeek] && weekHasPicks(sheetWeeks[liveWeek]);
-  if(liveSheet && byWeek[liveWeek]){ byWeek[liveWeek].live = true; cur = byWeek[liveWeek]; }
-  else if(cur && cur.week !== liveWeek){ /* committed picks.js is a non-live week — keep it, no live flag */ }
+  // The "current" week for the in-progress subhead = the live week's entry if we have one (sheet-graded
+  // or picks.js), regardless of whether it has picks yet — so Week 4 (1 of 16 final) reports as in
+  // progress. Fall back to whatever picks.js graded if the live week has no entry.
+  if(byWeek[liveWeek]){ byWeek[liveWeek].live = true; cur = byWeek[liveWeek]; }
 
   const weeks = Object.values(byWeek).sort((a,b)=>a.week-b.week);
   weeks.sort((a,b)=>a.week-b.week);
@@ -449,8 +475,10 @@ function decideWeek(wk){
       const topW=dec.topW; PLAYERS.forEach(p=>{ if((wk.results[p]||{w:-1}).w===topW) tot[p].tbShots++; });
     }
   });
-  // current win streak: consecutive most-recent graded weeks won (outright or TB)
-  const gradedWeeks=weeks.filter(wk=>decisions[wk.week].type!=="none").map(wk=>wk.week);
+  // current win streak: consecutive most-recent AWARDED weeks won (outright or TB). An in-progress
+  // ("incomplete") week is NOT a decided week — exclude it so it neither counts nor breaks streaks.
+  const AWARDED = t => t==="outright" || t==="tiebreaker" || t==="tied";
+  const gradedWeeks=weeks.filter(wk=>AWARDED(decisions[wk.week].type)).map(wk=>wk.week);
   function streak(p){ let s=0; for(let i=gradedWeeks.length-1;i>=0;i--){ const dec=decisions[gradedWeeks[i]];
       if(dec.winners.includes(p)) s++; else break; } return s; }
   function avgCorrect(p){ const gs=Object.values(tot[p].byWeek).filter(r=>(r.w+r.l)>0);
@@ -497,6 +525,12 @@ function decideWeek(wk){
   } else {
     ww.innerHTML=weeks.filter(wk=>decisions[wk.week].type!=="none").map(wk=>{
       const dec=decisions[wk.week];
+      // In-progress week: show status, NO winner awarded.
+      if(dec.type==="incomplete"){
+        return `<div class="wk"><span class="lab">Week ${wk.week}</span>
+          <span class="win"><span class="badge b-prog">IN PROGRESS</span>
+          <span class="muted" style="font-weight:400">${dec.finalGames} of ${dec.totalGames} games final — winner decided once the week completes</span></span></div>`;
+      }
       const names=dec.winners.join(" & ");
       let badge="", detail="";
       if(dec.type==="outright"){ badge=`<span class="badge b-out">OUTRIGHT</span>`; detail=`${dec.topW} correct`; }
@@ -671,8 +705,13 @@ function decideWeek(wk){
     renderTend();
   }
 
+  // "in progress" = the current week isn't complete yet (some games still pending), using the real
+  // final/total game counts — not just "zero final" (Week 4 with 1 of 16 final is still in progress).
+  const curInProgress = cur && cur.complete===false;
+  const curNote = curInProgress
+    ? ` · Week ${cur.week} in progress (${cur.finalGames||0} of ${cur.totalGames||0} final)` : "";
   document.getElementById("subhead").textContent =
-    `${gradedWeeks.length} week${gradedWeeks.length===1?"":"s"} counted${cur&&cur.noneFinal?` · Week ${cur.week} in progress`:""}`;
+    `${gradedWeeks.length} week${gradedWeeks.length===1?"":"s"} counted${curNote}`;
   document.getElementById("foot").innerHTML =
     `Standings accumulate automatically as weeks finish — picks come from the shared Google Sheet and every week is graded live from ESPN, `+
     `so a completed week appears here on its own (no manual edits). If the sheet feed is unavailable, the page falls back to the committed `+
