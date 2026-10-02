@@ -66,7 +66,23 @@
   /* white chip + dark ring so dark-primary logos (NYG etc.) stay readable on the dark bg */
   .tlogo{width:20px;height:20px;object-fit:contain;vertical-align:middle;margin-right:4px;
          background:#ffffff;border-radius:50%;padding:3px;box-shadow:0 0 0 1px rgba(0,0,0,.15)}
-  .trust{color:var(--grn)} .krypt{color:var(--red)}
+  .trust{color:var(--grn)} .krypt{color:var(--red)} .muted2{color:var(--mut)}
+  /* richer tendencies: control bar + per-player cards */
+  .tt-controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+  .tt-controls label{display:flex;flex-direction:column;gap:4px;font-size:10.5px;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--mut);font-weight:800}
+  .tt-controls select{background:#0d131c;color:var(--ink);border:1px solid var(--line);border-radius:8px;
+    padding:7px 9px;font-size:13px;font-weight:700;min-width:116px}
+  .tt-list{display:flex;flex-direction:column;gap:10px}
+  .tt-card{background:var(--bg);border:1px solid var(--line);border-radius:11px;padding:11px 12px}
+  .tt-head{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+  .tt-head .avatar,.tt-head .avatar-fb{width:30px;height:30px;font-size:13px}
+  .tt-head .nm{font-weight:800;font-size:15px}
+  .tt-items{display:flex;flex-direction:column;gap:5px;font-size:12.5px}
+  .tt-item{line-height:1.5}
+  .tt-item .k{color:var(--mut);font-weight:800;margin-right:3px}
+  .lown{color:var(--yel);font-size:11px;font-weight:700}
+  @media (max-width:430px){ .tt-controls select{min-width:0;flex:1} .tt-controls label{flex:1 1 30%} }
   @media (min-width:820px){
     .wrap{max-width:1080px;padding:22px}
     h1{font-size:26px}
@@ -97,6 +113,7 @@
     <h2>🏆 Season Standings</h2>
     <div class="grid-wrap"><table id="standings"><thead></thead><tbody></tbody></table></div>
     <div class="note">Weeks won = outright + via tiebreaker. Ranked by weeks won, then total correct picks.</div>
+    <div class="note" id="srcNote"></div>
   </div>
 
   <div class="card">
@@ -143,41 +160,184 @@ function pct(w,l){ const g=w+l; return g? Math.round(100*w/g) : 0; }
 function teamLogo(a){ const A=String(a).toUpperCase();
   return `<img class="tlogo" src="https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/${A.toLowerCase()}.png" alt="${A}" onerror="this.replaceWith(document.createTextNode('${A} '))">`; }
 
-// Grade the CURRENT week live from picks.js + ESPN (results + tiebreaker actual total).
-async function currentWeekResult(){
-  if(!window.PICKS || !PICKS.games) return null;
-  let gmap={};
-  try{
-    const res=await fetch(`${ESPN}?week=${PICKS.week}&seasontype=2&dates=${PICKS.season}`,{cache:"no-store"});
-    if(res.ok){ const d=await res.json();
-      (d.events||[]).forEach(ev=>{const c=ev.competitions&&ev.competitions[0];if(!c)return;
-        const t1=c.competitors[0],t2=c.competitors[1];if(!t1||!t2)return;
-        const st=c.status&&c.status.type?c.status.type:{}; let w=null;
-        const s1=parseInt(t1.score||0,10), s2=parseInt(t2.score||0,10);
-        if(st.completed) w=(t1.winner?t1.team.abbreviation:(t2.winner?t2.team.abbreviation:null));
-        gmap[mkey(t1.team.abbreviation,t2.team.abbreviation)]={completed:!!st.completed,winner:w,total:s1+s2};});
+/* ============================================================================
+   LIVE SHEET FEED — same Apps Script /exec source index.html uses, so the stats
+   page auto-updates as each week finishes (no more manual season.js edits).
+   These helpers are COPIED from index.html (unchanged logic) so the two pages
+   build weeks identically. Fallback to picks.js + season.js if the feed fails.
+   ============================================================================ */
+const SHEET = {
+  jsonUrl: "https://script.google.com/macros/s/AKfycbzeWELGG1lTZRfPtEBcF8-HjAhoecl-IHMtfpA-NL1dNWoqFruvrO7LHmmV3395jZXsrw/exec",
+  season: 2026,
+  players: PLAYERS.slice(),
+};
+function sheetConfigured(){ return !!(SHEET.jsonUrl && String(SHEET.jsonUrl).trim()); }
+
+// Authoritative per-game index from an ESPN scoreboard payload: completed/winner/total/scores +
+// the favorite abbr when (and ONLY when) odds exist (probSource "odds-spread"). Trimmed copy of
+// index.html's indexGames — just the fields the stats page needs (no live-win-prob heuristics).
+const LOGOS = {};
+function indexGames(data){
+  const m = {};
+  (data.events||[]).forEach(ev=>{
+    const c = ev.competitions && ev.competitions[0]; if(!c) return;
+    const comp = c.competitors||[]; const t1=comp[0], t2=comp[1]; if(!t1||!t2) return;
+    const a1 = t1.team.abbreviation, a2 = t2.team.abbreviation;
+    const A = a1.toUpperCase(), B = a2.toUpperCase();
+    const st = c.status && c.status.type ? c.status.type : {};
+    let winner = null;
+    if(st.completed) winner = (t1.winner? a1 : (t2.winner? a2 : null));
+    const s1 = parseInt(t1.score||0,10), s2 = parseInt(t2.score||0,10);
+    // favorite from pregame odds ONLY (honest: no odds -> no favorite, excluded from fav/dog lean)
+    let favAbbr = null, spread = null;
+    const od = (c.odds && c.odds[0]) ? c.odds[0] : null;
+    if(od){
+      spread = (od.spread!=null) ? Math.abs(Number(od.spread)) : null;
+      if(od.homeTeamOdds && od.homeTeamOdds.favorite) favAbbr = (t1.homeAway==="home" ? A : B);
+      else if(od.awayTeamOdds && od.awayTeamOdds.favorite) favAbbr = (t1.homeAway==="home" ? B : A);
+      else if(od.details){ const mm=String(od.details).match(/([A-Z]{2,4})\s*-?\d/); if(mm&&(mm[1]===A||mm[1]===B)) favAbbr=mm[1]; }
     }
+    const homeAbbr = (t1.homeAway==="home" ? A : B);
+    m[mkey(a1,a2)] = {
+      completed: !!st.completed, winner, total: s1+s2, scores: { [A]:s1, [B]:s2 },
+      favAbbr, spread, homeAbbr,
+    };
+  });
+  return m;
+}
+
+// Normalize ONE week from the Apps Script JSON (COPIED from index.html).
+function normalizeWeek(raw, weekNum){
+  if(!raw || !Array.isArray(raw.games) || !raw.games.length) throw new Error("week "+weekNum+" has no games");
+  const up = s => String(s==null?"":s).trim().toUpperCase();
+  const games = raw.games.map(g=>{
+    const picks={}; SHEET.players.forEach(p=>{ picks[p] = up((g.picks||{})[p]); });
+    return { team1:up(g.team1), team2:up(g.team2), picks };
+  }).filter(g=>g.team1 && g.team2);
+  if(!games.length) throw new Error("week "+weekNum+" has no valid game rows");
+  const tb = {}; SHEET.players.forEach(p=>{ const v=parseFloat((raw.tiebreaker||{})[p]); tb[p]=isNaN(v)?null:v; });
+  const tbgRaw = raw.tiebreakerGame || games[games.length-1];
+  return { week: weekNum, season: SHEET.season, players: SHEET.players.slice(), games,
+    tiebreakerGame: { team1:up(tbgRaw.team1), team2:up(tbgRaw.team2) }, tiebreaker: tb, _source:"google-sheet" };
+}
+
+// Fetch the Apps Script web app + parse into { [week]: weekObj } (COPIED from index.html).
+async function loadAllWeekTabs(){
+  if(!sheetConfigured()) return {};
+  try{
+    const res = await fetch(SHEET.jsonUrl, {cache:"no-store"});
+    if(!res.ok) throw new Error("web app HTTP "+res.status);
+    const text = await res.text();
+    if(/^\s*</.test(text)) throw new Error("web app did not return JSON (deployment access must be Anyone)");
+    const data = JSON.parse(text);
+    const weeksObj = (data && data.weeks) || {};
+    if(Array.isArray(data.players) && data.players.length) SHEET.players = data.players.slice();
+    if(data.season) SHEET.season = data.season;
+    const out = {};
+    Object.keys(weeksObj).forEach(k=>{ const n=parseInt(k,10); if(isNaN(n)) return;
+      try{ out[n] = normalizeWeek(weeksObj[k], n); } catch(e){ console.warn("skipping week",k,"-",e.message); } });
+    return out;
+  }catch(e){ console.warn("Apps Script picks unavailable, falling back to picks.js + season.js:", e.message); return {}; }
+}
+
+// Does this parsed week actually have picks entered? (COPIED from index.html.)
+function weekHasPicks(wk){
+  if(!wk || !Array.isArray(wk.games)) return false;
+  return wk.games.some(g => Object.values(g.picks||{}).some(v => v && String(v).trim()!==""));
+}
+
+// The REAL current NFL week from ESPN (COPIED from index.html).
+async function fetchCurrentNflWeek(){
+  try{
+    const res = await fetch(`${ESPN}?_=${Date.now()}`, {cache:"no-store"});
+    if(!res.ok) throw new Error("ESPN "+res.status);
+    const data = await res.json();
+    const wk = data && data.week && data.week.number;
+    const seasonYr = data && data.season && data.season.year;
+    if(wk) return { week: Number(wk), season: seasonYr || null };
+    return null;
+  }catch(e){ console.warn("current NFL week lookup failed:", e.message); return null; }
+}
+
+// Convert a parsed sheet week into an archive-shaped entry (COPIED from index.html).
+function weekTabToArchive(wk){
+  return { week: wk.week, _source:"google-sheet",
+    games: wk.games.map(g=>({ team1:g.team1, team2:g.team2, picks:g.picks })),
+    tiebreaker: wk.tiebreaker || {} };
+}
+
+// Grade a sheet-sourced week from ESPN (COPIED from index.html): fills winner/scores/favAbbr + tbActual.
+async function enrichArchiveWithEspn(entry){
+  try{
+    const url = `${ESPN}?week=${entry.week}&seasontype=2&dates=${SHEET.season}`;
+    const res = await fetch(url, {cache:"no-store"});
+    if(!res.ok) throw new Error("ESPN "+res.status);
+    const data = await res.json();
+    const idx = indexGames(data);
+    entry.games.forEach(g=>{
+      const info = idx[mkey(g.team1, g.team2)];
+      if(info){
+        if(info.completed && info.winner) g.winner = info.winner.toUpperCase();
+        if(info.scores) g.scores = info.scores;
+        if(info.favAbbr) g.favAbbr = info.favAbbr;   // favorite (odds-sourced only) for fav/dog lean
+        g.homeAbbr = info.homeAbbr;
+      }
+    });
+    const last = entry.games[entry.games.length-1];
+    if(last){ const info = idx[mkey(last.team1, last.team2)];
+      if(info && info.completed && info.total!=null) entry.tbActual = info.total; }
+  }catch(e){ console.warn(`ESPN grade for Week ${entry.week} failed:`, e.message); }
+  return entry;
+}
+
+// Turn a graded archive entry (games carry winner) into the stats-page week shape:
+//   { week, results:{p:{w,l}}, tiebreaker, tbActual, games:[finals w/ winner+picks(+favAbbr)], _source }
+// Mirrors currentWeekResult()'s output so the SAME standings/tendencies code consumes it.
+function archiveToWeekResult(entry){
+  const results={}; SHEET.players.forEach(p=>results[p]={w:0,l:0});
+  (entry.games||[]).forEach(g=>{
+    const win=String(g.winner||"").toUpperCase(); if(!win) return;
+    SHEET.players.forEach(p=>{ const pk=(g.picks[p]||"").toUpperCase(); if(!pk) return;
+      if(pk===win) results[p].w++; else results[p].l++; });
+  });
+  const games=(entry.games||[]).filter(g=>g.winner).map(g=>({
+    team1:g.team1, team2:g.team2, winner:String(g.winner).toUpperCase(),
+    picks:g.picks, favAbbr:g.favAbbr||null, homeAbbr:g.homeAbbr||null }));
+  return { week: entry.week, results, tiebreaker: entry.tiebreaker||{},
+    tbActual: entry.tbActual!=null?entry.tbActual:null, games, _source:"google-sheet" };
+}
+
+// Grade ONE week's PICKS object (shape {week,games,tiebreaker,tiebreakerGame}) live from ESPN.
+// Reuses indexGames so favorite/home info flows into tendencies. Used for the current/in-progress
+// week whether its picks come from the sheet (live) or committed picks.js (fallback).
+async function gradePicksLive(P){
+  if(!P || !P.games) return null;
+  let idx={};
+  try{
+    const res=await fetch(`${ESPN}?week=${P.week}&seasontype=2&dates=${P.season||SHEET.season}`,{cache:"no-store"});
+    if(res.ok){ idx = indexGames(await res.json()); }
   }catch(e){}
   const results={}; PLAYERS.forEach(p=>results[p]={w:0,l:0});
   let anyFinal=false;
-  PICKS.games.forEach(g=>{
-    const info=gmap[mkey(g.team1,g.team2)];
+  P.games.forEach(g=>{
+    const info=idx[mkey(g.team1,g.team2)];
     if(info&&info.completed&&info.winner){ anyFinal=true;
       PLAYERS.forEach(p=>{ const pk=(g.picks[p]||"").toUpperCase(); if(!pk)return;
         if(pk===info.winner.toUpperCase()) results[p].w++; else results[p].l++; });
     }
   });
-  // tiebreaker: actual last-game total (if that game is final) + each player's predicted total
   let tbActual=null;
-  if(PICKS.tiebreakerGame){ const tbi=gmap[mkey(PICKS.tiebreakerGame.team1,PICKS.tiebreakerGame.team2)];
+  if(P.tiebreakerGame){ const tbi=idx[mkey(P.tiebreakerGame.team1,P.tiebreakerGame.team2)];
     if(tbi&&tbi.completed) tbActual=tbi.total; }
-  // per-game detail (picks + winner) for team-tendency stats — only final games
-  const games=PICKS.games.map(g=>{ const info=gmap[mkey(g.team1,g.team2)];
+  const games=P.games.map(g=>{ const info=idx[mkey(g.team1,g.team2)];
     return (info&&info.completed&&info.winner)
-      ? { team1:g.team1, team2:g.team2, winner:info.winner.toUpperCase(), picks:g.picks } : null; }).filter(Boolean);
-  return { week: PICKS.week, results, tiebreaker: PICKS.tiebreaker||{}, tbActual, games,
-           live:true, noneFinal: !anyFinal };
+      ? { team1:g.team1, team2:g.team2, winner:info.winner.toUpperCase(), picks:g.picks,
+          favAbbr:info.favAbbr||null, homeAbbr:info.homeAbbr||null } : null; }).filter(Boolean);
+  return { week: P.week, results, tiebreaker: P.tiebreaker||{}, tbActual, games,
+           live:true, noneFinal: !anyFinal, _source: P._source || "committed" };
 }
+// Back-compat shim: current week from committed picks.js (fallback path).
+async function currentWeekResult(){ return gradePicksLive(window.PICKS); }
 
 // Decide a week's winner: most correct = outright; tie -> tiebreaker (closest to actual); else TIED.
 function decideWeek(wk){
@@ -202,11 +362,63 @@ function decideWeek(wk){
 }
 
 (async function(){
-  const weeks = (window.SEASON && SEASON.weeks) ? SEASON.weeks.slice() : [];
-  const cur = await currentWeekResult();
-  if(cur && !weeks.some(w=>w.week===cur.week)) weeks.push(cur);
+  // ---- Build the full-season week list, auto-updating from the live sheet feed ----
+  // Precedence (mirrors index.html so the two pages agree):
+  //   * current/live week: sheet-with-picks > committed picks.js
+  //   * each past week: sheet-with-picks (graded from ESPN) > committed season.js > (nothing)
+  //   * a sheet week with games but ALL-blank picks NEVER clobbers a committed week
+  // Fallback: if the feed fails entirely, use season.js + picks.js exactly as before (never blank).
+  let srcLabel = "committed files (picks.js + season.js)";
+  const committedWeeks = (window.SEASON && SEASON.weeks) ? SEASON.weeks.slice() : [];
+  const byWeek = {};                                  // week -> week-result object
+  committedWeeks.forEach(w=>{ byWeek[w.week] = w; });  // season.js baseline
+
+  const sheetWeeks = await loadAllWeekTabs();          // { [week]: normalizedWeek } ({} on failure)
+  const sheetNums = Object.keys(sheetWeeks).map(Number).sort((a,b)=>a-b);
+  const feedLive = sheetNums.length > 0;
+
+  // current NFL week (green-dot logic) — the week we grade as "live"
+  const nfl = await fetchCurrentNflWeek();
+  if(nfl && nfl.season) SHEET.season = nfl.season;
+  const liveWeek = (nfl && nfl.week) || (window.PICKS && PICKS.week) || (sheetNums.length?Math.max(...sheetNums):1);
+
+  if(feedLive){
+    srcLabel = "live Google Sheet (Apps Script feed)";
+    // Grade every sheet week that HAS picks and is at/under the live week, from ESPN.
+    const graded = await Promise.all(
+      sheetNums
+        .filter(n => n <= liveWeek && weekHasPicks(sheetWeeks[n]))
+        .map(n => enrichArchiveWithEspn(weekTabToArchive(sheetWeeks[n])).then(archiveToWeekResult))
+    );
+    // sheet-with-picks wins over committed for that week
+    graded.forEach(wr=>{ byWeek[wr.week] = wr; });
+  }
+
+  // the LIVE week: prefer a sheet-with-picks live week (already graded above); else grade committed
+  // picks.js live so the current week is never missing even when the sheet has no picks for it yet.
+  const liveSheet = feedLive && sheetWeeks[liveWeek] && weekHasPicks(sheetWeeks[liveWeek]);
+  let cur = null;
+  if(liveSheet){
+    cur = byWeek[liveWeek] || null;                   // graded sheet live week
+    if(cur) cur.live = true;
+  } else if(window.PICKS && PICKS.week === liveWeek){
+    cur = await currentWeekResult();                  // committed picks.js live
+    if(cur) byWeek[cur.week] = cur;
+  } else if(window.PICKS){
+    // committed picks.js is for a different week — still grade it so its week shows
+    cur = await currentWeekResult();
+    if(cur && !byWeek[cur.week]) byWeek[cur.week] = cur;
+  }
+
+  const weeks = Object.values(byWeek).sort((a,b)=>a.week-b.week);
   weeks.sort((a,b)=>a.week-b.week);
   const weekNums=weeks.map(w=>w.week);
+
+  // source badge (honest: live sheet vs committed), matching index.html's discipline
+  (function(){
+    const el=document.getElementById("srcNote");
+    if(el) el.innerHTML = `standings: <b>${srcLabel}</b>`;
+  })();
 
   // per-player aggregates
   const tot={}; PLAYERS.forEach(p=>tot[p]={w:0,l:0,byWeek:{},outright:0,tbWins:0,tbShots:0,weeksWon:0,bestWk:null});
@@ -300,38 +512,132 @@ function decideWeek(wk){
     }).join("");
   }
 
-  // ---- Team tendencies (collapsed): per player, only 2-3 highlights, never a 32-team wall ----
-  // Aggregate per-player per-team records from any week that carries game-level detail.
-  const teamRec={}; PLAYERS.forEach(p=>teamRec[p]={});
+  // ---- Team tendencies (richer, honest, sortable + filterable) ----
+  // Per player across ALL graded weeks: per-team pick record (how often they BACK a team + accuracy),
+  // per-team FADE record (how often they pick AGAINST a team), favorite-vs-underdog lean (odds-only),
+  // home-vs-away lean, and overall accuracy. Every stat carries its sample size N; tiny-N stats are
+  // flagged so one game can't masquerade as a trend.
+  const MIN_N = 2;                       // below this, a team stat is "low sample" (shown, flagged)
+  const T = {};                          // T[player] = aggregate
+  PLAYERS.forEach(p=>{ T[p]={ back:{}, fade:{}, picks:0, correct:0,
+    fav:{n:0,w:0}, dog:{n:0,w:0}, home:{n:0,w:0}, away:{n:0,w:0} }; });
   weeks.forEach(wk=>{ (wk.games||[]).forEach(g=>{
-    const win=String(g.winner||"").toUpperCase();
-    PLAYERS.forEach(p=>{ const pk=(g.picks&&g.picks[p]||"").toUpperCase(); if(!pk||!win) return;
-      const r=teamRec[p][pk]||(teamRec[p][pk]={w:0,l:0}); if(pk===win) r.w++; else r.l++; });
+    const win=String(g.winner||"").toUpperCase(); if(!win) return;
+    const t1=String(g.team1).toUpperCase(), t2=String(g.team2).toUpperCase();
+    const fav=g.favAbbr?String(g.favAbbr).toUpperCase():null;      // only when odds existed
+    const home=g.homeAbbr?String(g.homeAbbr).toUpperCase():null;
+    PLAYERS.forEach(p=>{
+      const pk=String(g.picks&&g.picks[p]||"").toUpperCase(); if(!pk) return;
+      const other = pk===t1 ? t2 : (pk===t2 ? t1 : null); if(other===null) return;
+      const right = pk===win;
+      const agg=T[p];
+      agg.picks++; if(right) agg.correct++;
+      // BACK record for the picked team
+      const b=agg.back[pk]||(agg.back[pk]={w:0,l:0}); if(right) b.w++; else b.l++;
+      // FADE record for the team they picked AGAINST (did fading it work out? right pick = fade worked)
+      const f=agg.fade[other]||(agg.fade[other]={w:0,l:0}); if(right) f.w++; else f.l++;
+      // favorite / underdog lean (only when we actually have odds for the game — else excluded, honest)
+      if(fav){ if(pk===fav){ agg.fav.n++; if(right) agg.fav.w++; } else { agg.dog.n++; if(right) agg.dog.w++; } }
+      // home / away lean (home team known from ESPN)
+      if(home){ if(pk===home){ agg.home.n++; if(right) agg.home.w++; } else { agg.away.n++; if(right) agg.away.w++; } }
+    });
   }); });
+
   const trBody=document.getElementById("teamrecs-body");
-  const anyTeamData=PLAYERS.some(p=>Object.keys(teamRec[p]).length);
+  const anyTeamData=PLAYERS.some(p=>T[p].picks>0);
   if(!anyTeamData){
-    trBody.innerHTML=`<div class="muted" style="font-size:12.5px">Builds up as games finish — each player's most-picked team, and the team that burns them most.</div>`;
+    trBody.innerHTML=`<div class="muted" style="font-size:12.5px">Builds up as games finish — most-picked teams, favorite-vs-underdog lean, best/worst teams, and who each player fades.</div>`;
   } else {
-    trBody.innerHTML=PLAYERS.map(p=>{
-      const teams=Object.entries(teamRec[p]); // [abbr,{w,l}]
-      if(!teams.length) return `<div class="trow"><span class="who">${avatar(p)}${p}</span><span class="thi muted">no graded picks yet</span></div>`;
-      // most-trusted = most times picked
-      const trusted=teams.slice().sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l))[0];
-      // kryptonite = worst record among teams picked >=2 times (fall back to any losing team)
-      const losers=teams.filter(([t,r])=>(r.w+r.l)>=2).sort((a,b)=> (a[1].w-a[1].l)-(b[1].w-b[1].l));
-      const krypt=(losers.length && (losers[0][1].l>losers[0][1].w))?losers[0]:null;
-      const hi=[`<span><span class="k">Most-picked:</span> ${teamLogo(trusted[0])}${trusted[0]} <span class="trust">${trusted[1].w}-${trusted[1].l}</span></span>`];
-      if(krypt) hi.push(`<span><span class="k">Kryptonite:</span> ${teamLogo(krypt[0])}${krypt[0]} <span class="krypt">${krypt[1].w}-${krypt[1].l}</span></span>`);
-      return `<div class="trow"><span class="who">${avatar(p)}${p}</span><span class="thi">${hi.join("")}</span></div>`;
-    }).join("");
+    // Build a flat list of per-player tendency CARDS; controls filter/sort which show.
+    const recOf = r => `${r.w}-${r.l}`;
+    const accOf = r => { const n=r.w+r.l; return n? Math.round(100*r.w/n):0; };
+    const leanPct = o => o.n? Math.round(100*o.w/o.n):0;
+
+    function playerCard(p){
+      const a=T[p]; if(!a.picks) return "";
+      const backArr=Object.entries(a.back).map(([t,r])=>({t,...r,n:r.w+r.l,acc:accOf(r)}));
+      const fadeArr=Object.entries(a.fade).map(([t,r])=>({t,...r,n:r.w+r.l,acc:accOf(r)}));
+      // most-picked (by count), honest N
+      const mostPicked=backArr.slice().sort((x,y)=>y.n-x.n)[0];
+      // best / worst team by accuracy among teams at/above MIN_N (so 1-game flukes don't win)
+      const qualified=backArr.filter(x=>x.n>=MIN_N);
+      const best=qualified.slice().sort((x,y)=> y.acc-x.acc || y.n-x.n)[0];
+      const worst=qualified.slice().sort((x,y)=> x.acc-y.acc || y.n-x.n)[0];
+      // who they fade most (picked against most often)
+      const fadedMost=fadeArr.slice().sort((x,y)=>y.n-x.n)[0];
+      const overallAcc=Math.round(100*a.correct/a.picks);
+
+      const chip=(label,abbr,rec,cls,n)=> `<span class="tt-item"><span class="k">${label}</span> ${teamLogo(abbr)}${abbr} `
+        +`<span class="${cls}">${rec}</span>${n<MIN_N?` <span class="lown">· low sample (${n})</span>`:` <span class="muted">· ${n} pick${n===1?"":"s"}</span>`}</span>`;
+
+      const parts=[];
+      parts.push(chip("Most-picked", mostPicked.t, recOf(mostPicked), "trust", mostPicked.n));
+      if(best && best.t!==mostPicked.t || (best && qualified.length>1)) parts.push(chip("Best team", best.t, `${recOf(best)} · ${best.acc}%`, "trust", best.n));
+      if(worst && (worst.l>worst.w)) parts.push(chip("Worst team", worst.t, `${recOf(worst)} · ${worst.acc}%`, "krypt", worst.n));
+      if(fadedMost) parts.push(chip("Fades most", fadedMost.t, recOf(fadedMost), "muted2", fadedMost.n));
+      // favorite / underdog lean (only if we had odds for enough games)
+      if(a.fav.n+a.dog.n>0){
+        const favTxt = a.fav.n? `favorites ${a.fav.w}/${a.fav.n} (${leanPct(a.fav)}%)` : "";
+        const dogTxt = a.dog.n? `dogs ${a.dog.w}/${a.dog.n} (${leanPct(a.dog)}%)` : "";
+        const lean = a.fav.n===0&&a.dog.n===0 ? "" :
+          (a.fav.n>a.dog.n ? "leans FAVORITES" : a.dog.n>a.fav.n ? "leans UNDERDOGS" : "even fav/dog");
+        parts.push(`<span class="tt-item"><span class="k">Fav/Dog:</span> ${lean} <span class="muted">· ${[favTxt,dogTxt].filter(Boolean).join(", ")}</span></span>`);
+      }
+      // home / away lean
+      if(a.home.n+a.away.n>0){
+        const lean = a.home.n>a.away.n ? "leans HOME" : a.away.n>a.home.n ? "leans AWAY" : "even home/away";
+        parts.push(`<span class="tt-item"><span class="k">Home/Away:</span> ${lean} <span class="muted">· home ${a.home.w}/${a.home.n}, away ${a.away.w}/${a.away.n}</span></span>`);
+      }
+      parts.push(`<span class="tt-item"><span class="k">Overall:</span> <span class="${overallAcc>=50?'trust':'krypt'}">${a.correct}/${a.picks} (${overallAcc}%)</span></span>`);
+
+      return `<div class="tt-card" data-player="${p}" data-acc="${overallAcc}" data-picks="${a.picks}">
+        <div class="tt-head">${avatar(p)}<span class="nm">${p}</span>
+          <span class="muted" style="font-weight:400;font-size:12px">${a.picks} graded pick${a.picks===1?"":"s"} · ${overallAcc}%</span></div>
+        <div class="tt-items">${parts.join("")}</div></div>`;
+    }
+
+    // control bar: filter by player + team, sort by player/accuracy/pick-count
+    const teamsSeen=[...new Set(PLAYERS.flatMap(p=>Object.keys(T[p].back)))].sort();
+    trBody.innerHTML =
+      `<div class="tt-controls">
+        <label>Player
+          <select id="ttPlayer"><option value="">All</option>${PLAYERS.map(p=>`<option value="${p}">${p}</option>`).join("")}</select></label>
+        <label>Team
+          <select id="ttTeam"><option value="">Any</option>${teamsSeen.map(t=>`<option value="${t}">${t}</option>`).join("")}</select></label>
+        <label>Sort
+          <select id="ttSort">
+            <option value="acc">Accuracy ↓</option>
+            <option value="picks">Pick count ↓</option>
+            <option value="player">Player A–Z</option>
+          </select></label>
+      </div>
+      <div class="tt-list" id="ttList"></div>
+      <div class="note" style="margin-top:6px">Favorite/underdog uses ESPN pregame odds and only counts games that had a line; small samples are flagged (min ${MIN_N} picks to rank a team).</div>`;
+
+    const ttList=document.getElementById("ttList");
+    function renderTend(){
+      const fp=document.getElementById("ttPlayer").value;
+      const ft=document.getElementById("ttTeam").value.toUpperCase();
+      const sort=document.getElementById("ttSort").value;
+      let list=PLAYERS.filter(p=>T[p].picks>0);
+      if(fp) list=list.filter(p=>p===fp);
+      if(ft) list=list.filter(p=> (T[p].back[ft] || T[p].fade[ft]));   // player interacted with that team
+      if(sort==="acc") list.sort((x,y)=> (T[y].correct/Math.max(1,T[y].picks)) - (T[x].correct/Math.max(1,T[x].picks)));
+      else if(sort==="picks") list.sort((x,y)=> T[y].picks - T[x].picks);
+      else list.sort((x,y)=> PLAYERS.indexOf(x)-PLAYERS.indexOf(y));   // player order
+      ttList.innerHTML = list.length ? list.map(playerCard).join("")
+        : `<div class="muted" style="font-size:12.5px;padding:8px">No players match that filter yet.</div>`;
+    }
+    ["ttPlayer","ttTeam","ttSort"].forEach(id=>document.getElementById(id).addEventListener("change",renderTend));
+    renderTend();
   }
 
   document.getElementById("subhead").textContent =
     `${gradedWeeks.length} week${gradedWeeks.length===1?"":"s"} counted${cur&&cur.noneFinal?` · Week ${cur.week} in progress`:""}`;
   document.getElementById("foot").innerHTML =
-    `Standings accumulate as weeks finish. The current week updates live from ESPN; past weeks come from <code>season.js</code>. `+
-    `Add a week's <code>tiebreaker</code> + <code>tbActual</code> in <code>season.js</code> so tied weeks can be awarded via tiebreaker.`;
+    `Standings accumulate automatically as weeks finish — picks come from the shared Google Sheet and every week is graded live from ESPN, `+
+    `so a completed week appears here on its own (no manual edits). If the sheet feed is unavailable, the page falls back to the committed `+
+    `<code>picks.js</code> + <code>season.js</code> so it never blanks.`;
 })();
 </script>
 </body>
