@@ -1521,15 +1521,41 @@ async function boot(){
     window.PICKS = tabs[LIVE_WEEK];                        // schedule-only current week (blank picks)
   } // else: keep committedPicks as-is (window.PICKS already = picks.js)
 
-  // ARCHIVE (past + future weeks): sheet-with-picks wins; else keep season.js; else sheet schedule-only.
-  // A blank sheet week never overwrites an existing committed (season.js) archive entry.
+  // Seed ARCHIVE from committed picks.js too (not just season.js): if picks.js is a week OTHER than
+  // the live week (e.g. picks.js is Week 2 but the live week is now Week 4), its picks are otherwise
+  // orphaned — season.js only has older weeks and the sheet tab for that week may be blank. Add it as
+  // a committed archive entry so that week's tab has real data (winners come from ESPN via
+  // enrichArchiveWithEspn, exactly like a season.js week). Only when it carries real picks.
+  if(committedPicks && committedPicks.week!==LIVE_WEEK && weekHasPicks(committedPicks)){
+    const w = committedPicks.week;
+    if(!ARCHIVE[w] || !weekHasPicks(ARCHIVE[w])){         // don't override a season.js entry that has real picks
+      ARCHIVE[w] = weekTabToArchive(committedPicks);      // committed picks.js -> ESPN-graded archive week
+    }
+  }
+
+  // ARCHIVE (past + future weeks): precedence per week =
+  //   sheet-with-SUBSTANTIAL-picks > committed entry with real picks (season.js or the picks.js seed)
+  //   > sheet schedule-only > nothing.
+  // KEY FIX: weekHasPicks is TRUE on even a single stray/auto-filled cell, so it's too weak to let a
+  // sheet tab override a committed week. A schedule-auto-filled Week 2 with one stray cell must NOT
+  // clobber the 16 real committed picks.js picks. So the sheet only overrides a committed-with-picks
+  // entry when the sheet actually has AT LEAST AS MANY picked games (i.e. it's a genuinely-filled week,
+  // not a stray cell). This is the index.html mirror of the stats.html hasGradedResults discipline.
+  const pickedGameCount = wk => (wk && Array.isArray(wk.games))
+    ? wk.games.filter(g => Object.values(g.picks||{}).some(v => v && String(v).trim()!=="")).length : 0;
   Object.keys(tabs).map(Number).filter(n=>!isNaN(n) && n!==LIVE_WEEK).forEach(w=>{
     const t = tabs[w];
+    const existing = ARCHIVE[w];
+    const existingReal = existing && weekHasPicks(existing);
     if(weekHasPicks(t)){
-      ARCHIVE[w] = weekTabToArchive(t);                   // sheet has real picks -> use + grade via ESPN
-    } else if(!ARCHIVE[w] || !(Array.isArray(ARCHIVE[w].games) && ARCHIVE[w].games.length)){
-      ARCHIVE[w] = weekTabToArchive(t);                   // schedule-only, but nothing committed here -> show schedule
-    } // else: committed season.js entry stays (blank sheet week does NOT clobber it)
+      // sheet has picks — but only let it WIN over a committed-with-picks week if it's at least as
+      // filled (guards against a stray-cell sheet tab clobbering real committed picks).
+      if(!existingReal || pickedGameCount(t) >= pickedGameCount(existing)){
+        ARCHIVE[w] = weekTabToArchive(t);                 // sheet is the real/better source -> grade via ESPN
+      } // else: committed entry has more real picks -> keep it (stray-cell sheet does NOT clobber)
+    } else if(!existingReal){
+      ARCHIVE[w] = weekTabToArchive(t);                   // schedule-only, nothing real committed here -> show schedule
+    } // else: committed entry WITH real picks (season.js or picks.js) stays
   });
 
   if(typeof PICKS==="undefined"){
