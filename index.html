@@ -116,6 +116,12 @@
   .ptw-rk{font-weight:800;color:var(--mut);text-align:center;font-variant-numeric:tabular-nums}
   .ptw-mid{display:flex;flex-direction:column;gap:2px;min-width:0}
   .ptw-name{font-weight:800;font-size:15px}
+  /* home/away/neutral pick split chip, sits inline after the player name */
+  .ptw-ha{margin-left:8px;font-size:11px;font-weight:700;color:var(--mut);white-space:nowrap;
+          vertical-align:middle;display:inline-flex;align-items:center;gap:5px}
+  .ptw-ha .ha-h{color:var(--grn)} .ptw-ha .ha-a{color:var(--blu)}
+  .ptw-ha .ha-n{color:var(--gold)} .ptw-ha .ha-u{color:var(--mut);opacity:.8}
+  .ptw-ha .ha-dot{color:var(--line)}
   .ptw-need{font-size:12px;color:var(--mut);line-height:1.35}
   .ptw-need.clinch{color:var(--gold);font-weight:700}
   .ptw-need.elim{color:var(--red);opacity:.85}
@@ -637,12 +643,17 @@ function indexGames(data){
       winProb = { [A]: 0.5, [B]: 0.5 };
       probSource = "even";
     }
+    // venue: which side is home + whether it's a neutral-site game (international/special).
+    // ESPN marks neutral games with competition.neutralSite === true; on those "home" is nominal only.
+    const neutral = !!c.neutralSite;
+    const homeAbbr = neutral ? null : (t1.homeAway === "home" ? A : (t2.homeAway === "home" ? B : null));
     m[mkey(a1,a2)] = {
       state, completed: !!st.completed, detail: st.shortDetail||"",
       date: ev.date || (c && c.date) || null,
       winner, total: s1+s2,
       scores: { [A]: s1, [B]: s2 },
-      winProb, probSource
+      winProb, probSource,
+      homeAbbr, neutral
     };
   });
   return m;
@@ -1032,6 +1043,37 @@ function rooterChip(r){
   return `<span class="rooter ${t.cls}" title="${title}">${t.emoji} ${r.name}</span>`;
 }
 
+// Count, for ONE player across this week's games, how many of their picks are the HOME team, the AWAY
+// team, or a NEUTRAL-site game. "unknown" = game has no venue data (e.g. an archived week with no ESPN
+// venue info) — counted separately so we never guess home/away. Returns null if the player made no picks.
+function homeAwaySplit(playerName, gamesOut){
+  let home=0, away=0, neutral=0, unknown=0, picks=0;
+  gamesOut.forEach(({g,info})=>{
+    const pk = (g.picks[playerName]||"").toUpperCase();
+    if(!pk) return;                                   // no pick for this game -> doesn't count
+    picks++;
+    if(info && info.neutral){ neutral++; return; }    // neutral-site game -> its own bucket
+    const hb = info && info.homeAbbr ? String(info.homeAbbr).toUpperCase() : null;
+    if(!hb){ unknown++; return; }                     // no venue data -> honest "unknown", not guessed
+    const A = String(g.team1).toUpperCase(), B = String(g.team2).toUpperCase();
+    if(pk===hb) home++;
+    else if(pk===A || pk===B) away++;                 // picked the non-home team in a home/away game
+    else unknown++;                                   // pick doesn't match either side (bad data) -> unknown
+  });
+  if(!picks) return null;
+  return { home, away, neutral, unknown };
+}
+// Compact chip line: 🏠 home · ✈️ away · ⚖️ neutral (neutral/unknown shown only when > 0).
+function homeAwayChipHtml(playerName, gamesOut){
+  const s = homeAwaySplit(playerName, gamesOut);
+  if(!s) return "";
+  const parts = [`<span class="ha-h" title="picked the home team">🏠 ${s.home}</span>`,
+                 `<span class="ha-a" title="picked the away team">✈️ ${s.away}</span>`];
+  if(s.neutral) parts.push(`<span class="ha-n" title="neutral-site game (no true home team)">⚖️ ${s.neutral}</span>`);
+  if(s.unknown) parts.push(`<span class="ha-u" title="venue unknown for these picks">? ${s.unknown}</span>`);
+  return `<span class="ptw-ha" title="This week's picks by home / away / neutral site">${parts.join('<span class="ha-dot">·</span>')}</span>`;
+}
+
 function renderPathToWin(gamesOut){
   const el = document.getElementById("pathtowin"); if(!el) return;
   const players = PICKS.players;
@@ -1146,7 +1188,7 @@ function renderPathToWin(gamesOut){
       <span class="ptw-rk">${r.eliminated?'—':(r.clinched?'👑':i+1)}</span>
       <span>${avatar(r.name)}</span>
       <span class="ptw-mid">
-        <span class="ptw-name">${r.name}</span>
+        <span class="ptw-name">${r.name}${homeAwayChipHtml(r.name, gamesOut)}</span>
         <span class="ptw-need">${pathNeedsText(r, ctx)}</span>
         ${mattersMini(r, isEarly)}
       </span>
