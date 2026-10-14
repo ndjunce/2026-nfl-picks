@@ -303,8 +303,6 @@
   <nav class="tabs">
     <a href="index.html" class="active">🏈 Picks</a>
     <a href="stats.html">📊 Stats</a>
-    <a href="admin.html">✏️ Admin</a>
-    <a href="#" class="soon">＋ More</a>
   </nav>
 </header>
 
@@ -464,6 +462,9 @@ async function enrichArchiveWithEspn(entry){
       const info = idx[mkey(g.team1, g.team2)];
       if(info){
         if(info.completed && info.winner) g.winner = info.winner.toUpperCase();
+        // a completed game with no winner is a settled TIE: mark it decided (no winner) so archived
+        // weeks count it toward "final" and render it as TIE, exactly like the live view.
+        else if(info.completed && !info.winner){ g.decided = true; g.tie = true; }
         if(info.scores) g.scores = info.scores;
       }
     });
@@ -647,8 +648,12 @@ function indexGames(data){
     // ESPN marks neutral games with competition.neutralSite === true; on those "home" is nominal only.
     const neutral = !!c.neutralSite;
     const homeAbbr = neutral ? null : (t1.homeAway === "home" ? A : (t2.homeAway === "home" ? B : null));
+    // decided = the game is OVER regardless of whether it produced a winner. A real NFL tie (or
+    // ESPN's brief completed:true + both winner:false) yields winner===null; such a game is DECIDED
+    // (counts toward "final"/week-complete) but awards nobody a point.
+    const decided = !!st.completed;
     m[mkey(a1,a2)] = {
-      state, completed: !!st.completed, detail: st.shortDetail||"",
+      state, completed: !!st.completed, decided, detail: st.shortDetail||"",
       date: ev.date || (c && c.date) || null,
       winner, total: s1+s2,
       scores: { [A]: s1, [B]: s2 },
@@ -669,16 +674,19 @@ function indexGames(data){
 // Returns { state, players:[{...}], swing:[...], hasProbSource, tbResolved }
 // ============================================================================
 function computePathToWin(gamesOut, players, tbPreds, tbActual){
-  // classify games
+  // classify games: a game is "final" once it's DECIDED (completed), with OR without a winner.
+  // A decided-no-winner game (true tie / completed-no-winner) counts toward the week being finished
+  // but awards nobody a point, so it no longer silently blocks the week from completing.
   const finals = [], undecided = [];
   gamesOut.forEach(o=>{
-    if(o.info && o.info.completed && o.info.winner) finals.push(o);
+    if(o.info && o.info.completed) finals.push(o);
     else undecided.push(o);
   });
 
-  // current correct (from finals only)
+  // current correct (from finals only; a decided-no-winner game awards nobody)
   const correct = {}; players.forEach(p=>correct[p]=0);
   finals.forEach(({g,info})=>{
+    if(!info.winner) return;                           // settled tie: no point to anyone
     const w = info.winner.toUpperCase();
     players.forEach(p=>{ if((g.picks[p]||"").toUpperCase()===w) correct[p]++; });
   });
@@ -1074,15 +1082,19 @@ function homeAwayChipHtml(playerName, gamesOut){
   return `<span class="ptw-ha" title="This week's picks by home / away / neutral site">${parts.join('<span class="ha-dot">·</span>')}</span>`;
 }
 
-function renderPathToWin(gamesOut){
+// opts (optional) lets an ARCHIVED week pass its OWN tiebreaker data; without it we read the LIVE
+// week's PICKS.* (correct for the live view). Fixes B1: an archived week was always reading the live
+// week's tiebreaker game/preds, so its tie could never resolve or be labelled as a tiebreaker win.
+function renderPathToWin(gamesOut, opts){
   const el = document.getElementById("pathtowin"); if(!el) return;
-  const players = PICKS.players;
-  const tbPreds = PICKS.tiebreaker || {};
-  // tbActual: DEN/KC combined total if that game is final
+  const players = (opts && opts.players) || PICKS.players;
+  const tbPreds = (opts && opts.tbPreds) || PICKS.tiebreaker || {};
+  const tbGame  = (opts && opts.tiebreakerGame) || PICKS.tiebreakerGame;
+  // tbActual: the tiebreaker game's combined total once that game is final.
   let tbActual = null;
-  const tbg = PICKS.tiebreakerGame;
-  if(tbg){
-    const tbInfo = gamesOut.find(o=> mkey(o.g.team1,o.g.team2)===mkey(tbg.team1,tbg.team2));
+  if(opts && opts.tbActual!=null){ tbActual = opts.tbActual; }   // archived week carries its own actual
+  else if(tbGame){
+    const tbInfo = gamesOut.find(o=> mkey(o.g.team1,o.g.team2)===mkey(tbGame.team1,tbGame.team2));
     if(tbInfo && tbInfo.info && tbInfo.info.completed) tbActual = tbInfo.info.total;
   }
   const ctx = computePathToWin(gamesOut, players, tbPreds, tbActual);
@@ -1091,9 +1103,28 @@ function renderPathToWin(gamesOut){
   if(ctx.state==="final"){
     const top = ctx.results[0].correct;
     const tiedTop = ctx.results.filter(r=>r.correct===top);
-    const how = tiedTop.length>1 ? `via tiebreaker (closest to ${ctx.tbActual})` : `outright`;
-    const banner = `<div class="ptw-banner win">🏆 ${ctx.results[0].name} wins the week — ${how}. (${top} correct)</div>`;
-    el.innerHTML = banner + `<div class="ptw-list">` + ctx.results.map((r,i)=>{
+    // selectedWeek is the week actually on screen (correct for BOTH live and archived renders; PICKS.week
+    // is always the live week, so it would mislabel an archived week).
+    const wkNum = (typeof selectedWeek!=="undefined" && selectedWeek!=null)
+      ? selectedWeek : ((typeof PICKS!=="undefined" && PICKS.week!=null) ? PICKS.week : "");
+    // When the top is tied, the TIEBREAKER (closest to actual) decides WHO won — pick that player,
+    // not the raw sort order. results[0] alone would mislabel the tiebreaker winner.
+    const byTb = (tiedTop.length>1 && ctx.tbActual!=null)
+      ? tiedTop.filter(r=>r.tbPred!=null)
+          .sort((a,b)=> Math.abs(a.tbPred-ctx.tbActual) - Math.abs(b.tbPred-ctx.tbActual))
+      : [];
+    const tbWon = tiedTop.length>1 && ctx.tbActual!=null && byTb.length>0;
+    const winnerName = tbWon ? byTb[0].name : ctx.results[0].name;
+    // Name the week + make a tiebreaker win read naturally (the owner asked for this to be surfaced).
+    const bannerTxt = tbWon
+      ? `🏆 ${winnerName} wins Week ${wkNum} on tiebreaker — closest to ${ctx.tbActual}. (${top} correct)`
+      : `🏆 ${winnerName} wins Week ${wkNum} outright. (${top} correct)`;
+    const banner = `<div class="ptw-banner win">${bannerTxt}</div>`;
+    // Show the TB winner first in the final list (so the 🏆 row matches the banner).
+    const ordered = tbWon
+      ? [byTb[0]].concat(ctx.results.filter(r=>r.name!==winnerName))
+      : ctx.results;
+    el.innerHTML = banner + `<div class="ptw-list">` + ordered.map((r,i)=>{
       const cls = "ptw-row"+(i===0?" clinched":" elim");
       return `<div class="${cls}"><span class="ptw-rk">${i===0?'🏆':i+1}</span><span>${avatar(r.name)}</span>`
         +`<span class="ptw-mid"><span class="ptw-name">${r.name}</span><span class="ptw-need">${r.correct} correct</span></span></div>`;
@@ -1227,8 +1258,13 @@ function renderPathToWin(gamesOut){
     </div>`;
   }).join("");
 
+  // Only show the win-% explainer when a % will actually render (an odds source is wired). With no
+  // odds source today the % never shows, so the long "how it's calculated / ESTIMATE" block would be
+  // promising a number that isn't there — gate it on hasProbSource (B3). Returns the day odds exist.
+  const pctExplainHtml = ctx.hasProbSource ? pctExplain : "";
+
   el.innerHTML = banner
-    + pctExplain
+    + pctExplainHtml
     + `<div class="ptw-sub-h">📋 Each player's path — the exact games they need</div>`
     + `<div class="ptw-list">${pathList}</div>`
     + `<div class="ptw-sub-h" style="margin-top:20px">🏈 Who's rooting for what</div>`
@@ -1289,8 +1325,18 @@ function renderWeekBar(){
   }
 }
 
+// Does this archive entry still need ESPN grading? (sheet-sourced week whose games carry no winner
+// yet). Season.js weeks ship with winners, so this is false for them.
+function archiveNeedsEnrich(wk){
+  return !!(wk && wk._source==="google-sheet" && Array.isArray(wk.games)
+    && !wk.games.some(g=>g.winner));
+}
+
 // Switch weeks. Live week -> resume live polling; past week -> render from the archive (no polling).
-function selectWeek(n){
+// Async so a not-yet-graded sheet week can be ENRICHED FROM ESPN before Path-to-Win renders — that
+// is what makes an archived week show its REAL final result + tiebreaker callout instead of the
+// "week not started / everyone 0 correct" state. Its only caller (onclick) ignores the return value.
+async function selectWeek(n){
   if(!weekHasData(n)) return;
   selectedWeek = n;
   renderWeekBar();
@@ -1299,9 +1345,14 @@ function selectWeek(n){
     tick();                 // resume live fetch/poll for the current week
   } else {
     if(pollTimer) clearTimeout(pollTimer);   // stop polling while viewing a finished week
-    renderArchivedWeek(ARCHIVE[n]);
     const rf = document.getElementById("refresh");
-    if(rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — final results (archived)`;
+    renderArchivedWeek(ARCHIVE[n]);          // instant first paint (may show pre-enrichment state)
+    if(archiveNeedsEnrich(ARCHIVE[n])){
+      if(rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — loading final results…`;
+      await enrichArchiveWithEspn(ARCHIVE[n]);
+      if(selectedWeek===n) renderArchivedWeek(ARCHIVE[n]);   // re-render with real winners (unless user moved on)
+    }
+    if(selectedWeek===n && rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — final results (archived)`;
   }
   window.scrollTo({top:0,behavior:"smooth"});
 }
@@ -1315,8 +1366,11 @@ function renderArchivedWeek(wk){
     const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
     const win = g.winner ? g.winner.toUpperCase() : null;
     const s = g.scores || {};
+    // a game is DECIDED for an archived week if it has a winner OR was marked a settled tie
+    // (g.decided, set by enrichArchiveWithEspn). Both complete the week; only a winner scores.
+    const completed = !!(win || g.decided);
     return { g:{team1:g.team1, team2:g.team2, picks:g.picks||{}},
-             info:{ state:"post", completed:true, winner:win, detail:"",
+             info:{ state:"post", completed, winner:win, detail:"",
                     total:(wk.tbActual!=null?wk.tbActual:null),
                     scores:{ [A]:(s[A]!=null?s[A]:null), [B]:(s[B]!=null?s[B]:null) } } };
   });
@@ -1359,24 +1413,32 @@ function renderArchivedWeek(wk){
     tb.innerHTML = `<b>Tiebreaker</b>: ` + players.map(p=>`${p} ${tbPreds[p]!=null?tbPreds[p]:'?'}`).join(" · ");
   }
 
-  // path to win (headline) + games list reuse the shared renderers
-  renderPathToWin(gamesOut);
+  // path to win (headline) + games list reuse the shared renderers. Pass the ARCHIVED week's own
+  // tiebreaker data so its tie resolves to the right player and the tiebreaker callout can fire (B1).
+  renderPathToWin(gamesOut, {
+    players,
+    tbPreds: tbPreds,
+    tbActual: (wk.tbActual!=null ? wk.tbActual : null),
+    tiebreakerGame: (wk.games && wk.games.length) ? wk.games[wk.games.length-1] : null,
+  });
   renderDeciding(gamesOut);   // no-op unless a #deciding element exists (kept for compatibility)
 
   const gel = document.getElementById("games");
   gel.innerHTML = gamesOut.map(({g,info})=>{
     const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
     const win = info.winner?info.winner.toUpperCase():null;
+    // decided-no-winner archived game = a settled TIE: no team styled won/lost, no pick scored.
+    const tie = (info.completed && !win);
     const teamSpan=(t)=>{ const cls = win ? (t===win?"won":"lost") : ""; return `<span class="${cls}">${teamChip(t, cls)}</span>`; };
     const hasScores = info.scores && (info.scores[A]!=null || info.scores[B]!=null);
     const sc = hasScores ? `<span class="score">${A} ${info.scores[A]!=null?info.scores[A]:'–'} – ${B} ${info.scores[B]!=null?info.scores[B]:'–'}</span>` : "";
     const pks = players.map(p=>{ const pick=(g.picks[p]||"").toUpperCase();
-      let c=""; if(win) c=(pick===win)?" correct":" wrong";
+      let c=""; if(win) c=(pick===win)?" correct":" wrong";   // tie -> neither correct nor wrong
       const pk = pick ? teamChip(pick) : '<span class="pick">—</span>';
       return `<span class="pk${c}"><span class="who">${p}:</span> ${pk}</span>`; }).join("");
     return `<div class="game"><div class="ghead">
         <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}</span>
-        <span class="gstatus s-post">FINAL</span></div>
+        <span class="gstatus s-post">${tie?"TIE":"FINAL"}</span></div>
       ${sc?`<div style="margin-bottom:8px">${sc}</div>`:""}
       <div class="picks">${pks}</div></div>`;
   }).join("");
@@ -1470,15 +1532,17 @@ function render(data){
       const cls = win ? (t===win?"won":"lost") : "";
       return `<span class="${cls}">${teamChip(t, cls)}</span>`;
     };
+    // decided-no-winner live game = settled TIE: show "TIE", score nobody as correct/wrong.
+    const tie = (info.completed && !win);
     const stCls = info.state==="post"?"s-post":(info.state==="in"?"s-in":"s-pre");
     const kickCT = fmtCT(info.date);
-    const stTxt = info.state==="post"?"FINAL":(info.state==="in"?"LIVE":(kickCT||"—"));
+    const stTxt = tie?"TIE":(info.state==="post"?"FINAL":(info.state==="in"?"LIVE":(kickCT||"—")));
     const sc = (info.scores&&Object.keys(info.scores).length)
       ? `<span class="score">${A} ${info.scores[A]||0} – ${B} ${info.scores[B]||0}</span>` : "";
     const pks = PICKS.players.map(p=>{
       const pick=(g.picks[p]||"").toUpperCase();
       let c="";
-      if(win) c = (pick===win)?" correct":" wrong";
+      if(win) c = (pick===win)?" correct":" wrong";   // tie -> neither correct nor wrong
       const pk = pick ? teamChip(pick) : '<span class="pick">—</span>';
       return `<span class="pk${c}"><span class="who">${p}:</span> ${pk}</span>`;
     }).join("");

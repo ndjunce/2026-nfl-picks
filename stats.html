@@ -102,8 +102,6 @@
   <nav class="tabs">
     <a href="index.html">🏈 Picks</a>
     <a href="stats.html" class="active">📊 Stats</a>
-    <a href="admin.html">✏️ Admin</a>
-    <a href="#" class="soon">＋ More</a>
   </nav>
 </header>
 
@@ -199,8 +197,11 @@ function indexGames(data){
       else if(od.details){ const mm=String(od.details).match(/([A-Z]{2,4})\s*-?\d/); if(mm&&(mm[1]===A||mm[1]===B)) favAbbr=mm[1]; }
     }
     const homeAbbr = (t1.homeAway==="home" ? A : B);
+    // decided = game is over (completed) whether or not it produced a winner. A settled tie
+    // (completed, winner===null) is decided and counts toward week completeness but scores nobody.
+    const decided = !!st.completed;
     m[mkey(a1,a2)] = {
-      completed: !!st.completed, winner, total: s1+s2, scores: { [A]:s1, [B]:s2 },
+      completed: !!st.completed, decided, winner, total: s1+s2, scores: { [A]:s1, [B]:s2 },
       favAbbr, spread, homeAbbr,
     };
   });
@@ -279,6 +280,8 @@ async function enrichArchiveWithEspn(entry){
       const info = idx[mkey(g.team1, g.team2)];
       if(info){
         if(info.completed && info.winner) g.winner = info.winner.toUpperCase();
+        // completed with no winner = settled TIE: mark decided (no winner) so the week still completes.
+        else if(info.completed && !info.winner){ g.decided = true; g.tie = true; }
         if(info.scores) g.scores = info.scores;
         if(info.favAbbr) g.favAbbr = info.favAbbr;   // favorite (odds-sourced only) for fav/dog lean
         g.homeAbbr = info.homeAbbr;
@@ -305,7 +308,10 @@ function archiveToWeekResult(entry){
     team1:g.team1, team2:g.team2, winner:String(g.winner).toUpperCase(),
     picks:g.picks, favAbbr:g.favAbbr||null, homeAbbr:g.homeAbbr||null }));
   const totalGames=(entry.games||[]).length;
-  const finalGames=games.length;                       // games with a winner = final
+  // DECIDED = has a winner OR was marked a settled tie (g.decided). A settled tie counts toward the
+  // week completing even though it scores nobody, so a tie no longer leaves the week forever "in progress".
+  const decidedGames=(entry.games||[]).filter(g=>g.winner||g.decided).length;
+  const finalGames=decidedGames;                       // decided games = final (tie included)
   return { week: entry.week, results, tiebreaker: entry.tiebreaker||{},
     tbActual: entry.tbActual!=null?entry.tbActual:null, games, _source:"google-sheet",
     totalGames, finalGames, complete: totalGames>0 && finalGames>=totalGames };
@@ -322,9 +328,10 @@ async function gradePicksLive(P){
     if(res.ok){ idx = indexGames(await res.json()); }
   }catch(e){}
   const results={}; PLAYERS.forEach(p=>results[p]={w:0,l:0});
-  let anyFinal=false;
+  let anyFinal=false, decidedGames=0;
   P.games.forEach(g=>{
     const info=idx[mkey(g.team1,g.team2)];
+    if(info&&info.completed) decidedGames++;            // DECIDED (winner OR settled tie) -> counts toward completeness
     if(info&&info.completed&&info.winner){ anyFinal=true;
       PLAYERS.forEach(p=>{ const pk=(g.picks[p]||"").toUpperCase(); if(!pk)return;
         if(pk===info.winner.toUpperCase()) results[p].w++; else results[p].l++; });
@@ -338,7 +345,7 @@ async function gradePicksLive(P){
       ? { team1:g.team1, team2:g.team2, winner:info.winner.toUpperCase(), picks:g.picks,
           favAbbr:info.favAbbr||null, homeAbbr:info.homeAbbr||null } : null; }).filter(Boolean);
   const totalGames=P.games.length;
-  const finalGames=games.length;                       // games we graded as final (winner known)
+  const finalGames=decidedGames;                       // decided games (winner OR settled tie) = final
   return { week: P.week, results, tiebreaker: P.tiebreaker||{}, tbActual, games,
            live:true, noneFinal: !anyFinal, _source: P._source || "committed",
            totalGames, finalGames, complete: totalGames>0 && finalGames>=totalGames };
