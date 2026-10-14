@@ -1097,6 +1097,24 @@ function renderPathToWin(gamesOut, opts){
     const tbInfo = gamesOut.find(o=> mkey(o.g.team1,o.g.team2)===mkey(tbGame.team1,tbGame.team2));
     if(tbInfo && tbInfo.info && tbInfo.info.completed) tbActual = tbInfo.info.total;
   }
+
+  // ===== EMPTY STATE: no picks in yet (current/unplayed week) =====
+  // Before any player has submitted a pick, computePathToWin would classify the week "notstarted"
+  // and emit a degenerate card for everyone (0 correct · "no live picks left" · the same WSH-over-SF
+  // "games that matter" · a ~1/6 ≈ 17% split-evenly "est"). That's meaningless and misleading, so
+  // render a clear placeholder instead and bail BEFORE computePathToWin. Archived/completed weeks
+  // always carry real picks, so this never fires for them (B1/B2 behavior unchanged).
+  const hasAnyPick = Array.isArray(gamesOut) && gamesOut.some(o => o && o.g &&
+    Object.values(o.g.picks||{}).some(v => v && String(v).trim()!==""));
+  const hasGames = Array.isArray(gamesOut) && gamesOut.length>0;
+  if(!hasAnyPick || !hasGames){
+    const wkNum = (typeof selectedWeek!=="undefined" && selectedWeek!=null)
+      ? selectedWeek : ((typeof PICKS!=="undefined" && PICKS.week!=null) ? PICKS.week : "");
+    el.innerHTML = `<div class="ptw-banner">🕒 Picks aren't in yet for Week ${wkNum}.</div>`
+      + `<div class="note" style="text-align:left">This card lights up once the group's picks are entered — who's rooting for what, must-win games, and each player's path.</div>`;
+    return;
+  }
+
   const ctx = computePathToWin(gamesOut, players, tbPreds, tbActual);
 
   // ===== ALL FINAL: winner + how decided =====
