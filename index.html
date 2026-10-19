@@ -324,6 +324,7 @@
   </div>
 
   <div class="refresh" id="refresh"></div>
+  <div class="note"><button type="button" onclick="location.reload()">Refresh picks &amp; scores</button> · Reloads picks from the Sheet as well as scores.</div>
 
   <div class="card">
     <h2>Games &amp; Picks <span class="muted" style="font-size:11px;text-transform:none;letter-spacing:0">— who picked what</span></h2>
@@ -1376,6 +1377,17 @@ async function selectWeek(n){
 }
 
 // Render a finished, archived week from season.js (games carry winner + picks; all final).
+function pickDistribution(game, players){
+  const first=String(game.team1).toUpperCase(),second=String(game.team2).toUpperCase();
+  const counts={[first]:0,[second]:0};
+  players.forEach(player=>{
+    const pick=String(game.picks?.[player]||'').trim().toUpperCase();
+    if(Object.hasOwn(counts,pick)) counts[pick]++;
+  });
+  const missing=players.length-counts[first]-counts[second];
+  return `<div class="note" style="text-align:left;margin:0 0 8px">${counts[first]} picked ${first} · ${counts[second]} picked ${second}${missing?` · ${missing} not submitted`:''}</div>`;
+}
+
 function renderArchivedWeek(wk){
   if(!wk){ return; }
   const players = PICKS.players;
@@ -1458,7 +1470,7 @@ function renderArchivedWeek(wk){
         <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}</span>
         <span class="gstatus s-post">${tie?"TIE":"FINAL"}</span></div>
       ${sc?`<div style="margin-bottom:8px">${sc}</div>`:""}
-      <div class="picks">${pks}</div></div>`;
+      ${pickDistribution(g,players)}<div class="picks">${pks}</div></div>`;
   }).join("");
 
   document.getElementById("subhead").textContent =
@@ -1570,7 +1582,7 @@ function render(data){
         <span class="gstatus ${stCls}">${stTxt}</span>
       </div>
       ${sc?`<div style="margin-bottom:8px">${sc} <span class="score" style="color:var(--mut)">${info.detail||""}</span></div>`:""}
-      <div class="picks">${pks}</div>
+      ${pickDistribution(g,PICKS.players)}<div class="picks">${pks}</div>
     </div>`;
   }).join("");
 

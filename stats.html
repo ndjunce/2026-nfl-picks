@@ -74,12 +74,28 @@
     letter-spacing:.05em;color:var(--mut);font-weight:800}
   .tt-controls select{background:#0d131c;color:var(--ink);border:1px solid var(--line);border-radius:8px;
     padding:7px 9px;font-size:13px;font-weight:700;min-width:116px}
-  .tt-list{display:flex;flex-direction:column;gap:10px}
+  .tt-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
   .tt-card{background:var(--bg);border:1px solid var(--line);border-radius:11px;padding:11px 12px}
   .tt-head{display:flex;align-items:center;gap:9px;margin-bottom:8px}
   .tt-head .avatar,.tt-head .avatar-fb{width:30px;height:30px;font-size:13px}
   .tt-head .nm{font-weight:800;font-size:15px}
-  .tt-items{display:flex;flex-direction:column;gap:5px;font-size:12.5px}
+  .tt-items{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;font-size:13px}
+  .tt-card{min-width:0;padding:16px}
+  .tt-head{flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:16px}
+  .tt-overall{margin-left:auto;text-align:right;font-size:12px;color:var(--mut)}
+  .tt-overall strong{display:block;color:var(--ink);font-size:18px}
+  .tt-metric h3{margin:0 0 4px;font-size:12px;font-weight:600;color:var(--mut)}
+  .tt-metric p{margin:4px 0 0;color:var(--mut);font-size:12px}
+  .tt-team{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin:4px 0}
+  .tt-team strong{font-size:14px;font-weight:600}
+  .tt-split{grid-column:1/-1;border-top:1px solid var(--line);padding-top:12px}
+  .tt-intro{font-size:13px;color:var(--mut);margin:0 0 16px}
+  .tt-detail{grid-column:1/-1;margin-top:4px}
+  .tt-detail summary{font-size:11px}
+  .tt-detail th,.tt-detail td{font-size:12px;padding:8px 4px;white-space:normal}
+  .tt-detail td:first-child,.tt-detail th:first-child{text-align:left}
+  .tt-detail caption{text-align:left;color:var(--mut);font-size:12px;padding:8px 0}
+  @media(max-width:760px){.tt-list{grid-template-columns:1fr}}
   .tt-item{line-height:1.5}
   .tt-item .k{color:var(--mut);font-weight:800;margin-right:3px}
   .lown{color:var(--yel);font-size:11px;font-weight:700}
@@ -99,6 +115,7 @@
 <header>
   <h1>📊 Season Standings</h1>
   <div class="sub" id="subhead">Loading…</div>
+  <div class="sub"><span id="load-status" role="status">Loading picks and results…</span> · <button type="button" onclick="location.reload()">Refresh picks &amp; scores</button></div>
   <nav class="tabs">
     <a href="index.html">🏈 Picks</a>
     <a href="stats.html" class="active">📊 Stats</a>
@@ -133,11 +150,32 @@
 
   <div class="card">
     <details id="teamrecs">
-      <summary>🔎 Team tendencies <span class="muted" style="font-weight:400">— tap to expand</span></summary>
+      <summary>Team tendencies <span class="muted" style="font-weight:400">— who you trust, who you avoid</span></summary>
       <div id="teamrecs-body" style="margin-top:12px"></div>
     </details>
   </div>
 
+  <div class="card">
+    <h2>Underdog picks</h2>
+    <div class="note" id="dogs-note">Loading closing spreads…</div>
+    <div class="grid-wrap"><table id="dogs"><thead><tr><th>Player</th><th>Dogs picked</th><th>Dogs won</th><th>Hit %</th></tr></thead><tbody></tbody></table></div>
+    <div class="note" id="dogs-biggest"></div>
+    <div class="grid-wrap"><table id="dogs-weekly"><thead><tr><th>Week</th><th>Dog of the week</th><th>Picked by</th></tr></thead><tbody></tbody></table></div>
+  </div>
+  <div class="card">
+    <h2>Favorite picks</h2>
+    <div class="note">Same closing lines as underdogs. Negative-spread teams are favorites; wins are straight up, not against the spread.</div>
+    <div class="grid-wrap"><table id="favorites"><thead><tr><th>Player</th><th>Favorites picked</th><th>Favorites won</th><th>Hit %</th></tr></thead><tbody></tbody></table></div>
+    <div class="note" id="favorites-biggest"></div>
+    <div class="grid-wrap"><table id="favorites-weekly"><thead><tr><th>Week</th><th>Biggest favorite win picked</th><th>Picked by</th></tr></thead><tbody></tbody></table></div>
+  </div>
+  <div class="card">
+    <h2>Head to head</h2>
+    <div class="tt-controls"><label>Player<select id="h2h-first"></select></label><label>Opponent<select id="h2h-second"></select></label></div>
+    <p class="tt-intro">Compare correct picks in completed weeks. Equal scores are a draw here; weekly tiebreakers do not apply.</p>
+    <div id="h2h-summary" role="status"></div>
+    <div class="grid-wrap"><table id="h2h"><thead><tr><th>Week</th><th id="h2h-name-first"></th><th id="h2h-name-second"></th><th>Result</th></tr></thead><tbody></tbody></table></div>
+  </div>
   <div class="note" id="foot"></div>
 </div>
 
@@ -392,6 +430,108 @@ function decideWeek(wk){
   return { winners:top, type:"tied", topW }; // no TB data -> shown as tied
 }
 
+async function renderUnderdogs(weeks){
+  const rows = [];
+  const favoriteRows = [];
+  const coverage = {graded:0, known:0, cached:0};
+  const escape = value => String(value).replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+  const fetchJson = async url => {
+    const response = await fetch(url, {signal:AbortSignal.timeout(15000)});
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  };
+  const jobs = [];
+  await Promise.all(weeks.map(async week => {
+    const games = (week.games||[]).filter(game => game.winner && PLAYERS.some(player => [game.team1,game.team2].includes(game.picks?.[player])));
+    coverage.graded += games.length;
+    try{
+      const scoreboard = await fetchJson(`${ESPN}?week=${week.week}&seasontype=2&dates=${SHEET.season}`);
+      for(const game of games){
+        const event = (scoreboard.events||[]).find(event => {
+          const teams = event.competitions?.[0]?.competitors||[];
+          return teams.length===2 && mkey(teams[0].team.abbreviation,teams[1].team.abbreviation)===mkey(game.team1,game.team2);
+        });
+        if(event) jobs.push({week:week.week, game, event});
+      }
+    }catch(error){ console.warn(`Underdog schedule week ${week.week}:`, error.message); }
+  }));
+  let cursor = 0;
+  await Promise.all(Array.from({length:Math.min(6,jobs.length)}, async () => {
+    while(cursor < jobs.length){
+      const job = jobs[cursor++];
+      try{
+        const cacheKey = `closing-lines-v1:${SHEET.season}:${job.event.id}:100`;
+        let line = null;
+        let reused = false;
+        try{
+          const cached = JSON.parse(localStorage.getItem(cacheKey));
+          if(cached && Date.now()>=cached.saved && Date.now()-cached.saved<7*86400000 && Number.isFinite(cached.home) && Number.isFinite(cached.away) && cached.home===-cached.away){
+            line={pointSpread:{home:{close:{line:cached.home}},away:{close:{line:cached.away}}}};
+            coverage.cached++;
+            reused = true;
+          }
+        }catch(error){}
+        if(!line){
+          const summary = await fetchJson(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${job.event.id}`);
+          line = (summary.pickcenter||[]).find(odds => String(odds.provider?.id)==='100');
+        }
+        const homeLine = line?.pointSpread?.home?.close?.line;
+        const awayLine = line?.pointSpread?.away?.close?.line;
+        if(homeLine==null || awayLine==null || String(homeLine).trim()==='' || String(awayLine).trim()==='') continue;
+        const homeSpread = Number(homeLine), awaySpread = Number(awayLine);
+        if(!Number.isFinite(homeSpread) || !Number.isFinite(awaySpread) || homeSpread!==-awaySpread) continue;
+        if(!reused && job.event.competitions[0].status?.type?.completed){
+          try{ localStorage.setItem(cacheKey,JSON.stringify({saved:Date.now(),home:homeSpread,away:awaySpread})); }catch(error){}
+        }
+        const competitors = job.event.competitions[0].competitors;
+        const dog = competitors.find(team => team.homeAway===(homeSpread>0?'home':'away'))?.team.abbreviation;
+        coverage.known++;
+        if(homeSpread===0 || ![job.game.team1,job.game.team2].includes(dog)) continue;
+        rows.push({week:job.week, dog, spread:Math.abs(homeSpread), opponent:job.game.team1===dog?job.game.team2:job.game.team1,
+          won:job.game.winner===dog, players:PLAYERS.filter(player => job.game.picks?.[player]===dog)});
+        const favorite=job.game.team1===dog?job.game.team2:job.game.team1;
+        favoriteRows.push({week:job.week, favorite, opponent:dog, spread:Math.abs(homeSpread),
+          won:job.game.winner===favorite, players:PLAYERS.filter(player=>job.game.picks?.[player]===favorite)});
+      }catch(error){ console.warn(`Underdog odds ${job.event.id}:`, error.message); }
+    }
+  }));
+  const totals = PLAYERS.map(player => {
+    const picks = rows.filter(row => row.players.includes(player));
+    return {player, picked:picks.length, won:picks.filter(row=>row.won).length};
+  });
+  document.querySelector('#dogs tbody').innerHTML = totals.map(row => `<tr><td>${escape(row.player)}</td><td>${row.picked}</td><td>${row.won}</td><td>${row.picked?(100*row.won/row.picked).toFixed(1)+'%':'—'}</td></tr>`).join('');
+  const favoriteTotals=PLAYERS.map(player=>{
+    const picks=favoriteRows.filter(row=>row.players.includes(player));
+    return {player,picked:picks.length,won:picks.filter(row=>row.won).length};
+  });
+  document.querySelector('#favorites tbody').innerHTML=favoriteTotals.map(row=>`<tr><td>${escape(row.player)}</td><td>${row.picked}</td><td>${row.won}</td><td>${row.picked?(100*row.won/row.picked).toFixed(1)+'%':'—'}</td></tr>`).join('');
+  const favoriteWins=favoriteRows.filter(row=>row.won&&row.players.length).sort((left,right)=>right.spread-left.spread||left.favorite.localeCompare(right.favorite));
+  const favoriteLosses=favoriteRows.filter(row=>!row.won&&row.players.length).sort((left,right)=>right.spread-left.spread||left.week-right.week);
+  const letdowns=favoriteLosses.filter(row=>row.spread===favoriteLosses[0]?.spread);
+  document.getElementById('favorites-biggest').textContent=letdowns.length?'Biggest favorite letdown: '+letdowns.map(row=>`${row.favorite} -${row.spread} lost to ${row.opponent}, Week ${row.week} (${row.players.join(', ')})`).join('; '):'No picked favorite losses in available lines.';
+  document.querySelector('#favorites-weekly tbody').innerHTML=weeks.map(week=>{
+    const weekly=favoriteWins.filter(row=>row.week===week.week);
+    const leaders=weekly.filter(row=>row.spread===weekly[0]?.spread);
+    return leaders.length?leaders.map(row=>`<tr><td>${week.week}</td><td>${escape(row.favorite)} -${row.spread} over ${escape(row.opponent)}</td><td>${row.players.map(escape).join(', ')}</td></tr>`).join(''):`<tr><td>${week.week}</td><td>No picked favorite win in available lines</td><td>—</td></tr>`;
+  }).join('');
+  const wins = rows.filter(row => row.won && row.players.length).sort((left,right)=>right.spread-left.spread || left.week-right.week || left.dog.localeCompare(right.dog));
+  const describe = row => `${escape(row.dog)} +${row.spread} over ${escape(row.opponent)}`;
+  const biggest = wins.filter(row=>row.spread===wins[0]?.spread);
+  document.getElementById('dogs-biggest').textContent = biggest.length
+    ? 'Biggest underdog win: '+biggest.map(row=>`${row.dog} +${row.spread} over ${row.opponent}, Week ${row.week} (${row.players.join(', ')})`).join('; ')
+    : 'No picked underdog wins in the available lines.';
+  document.querySelector('#dogs-weekly tbody').innerHTML = weeks.map(week => {
+    const weekly = wins.filter(row=>row.week===week.week);
+    const leaders = weekly.filter(row=>row.spread===weekly[0]?.spread);
+    return leaders.length ? leaders.map(row=>`<tr><td>${week.week}</td><td>${describe(row)}</td><td>${row.players.map(escape).join(', ')}</td></tr>`).join('')
+      : `<tr><td>${week.week}</td><td>No picked underdog win</td><td>—</td></tr>`;
+  }).join('');
+  document.getElementById('dogs-note').textContent = `ESPN / DraftKings closing spreads available for ${coverage.known}/${coverage.graded} graded games with picks. `+
+    'Only settled picks count; positive-spread teams are underdogs, pick’em games are excluded. Wins are straight up. Biggest / weekly dogs use largest spread; all ties shown. Missing lines are excluded'+(coverage.known<coverage.graded?' — records and awards are partial.':'.');
+  document.getElementById('dogs-note').textContent+=` Historical lines cached on this device for up to 7 days (${coverage.cached} reused); results and picks reload fresh. Coverage applies to both tables.`;
+  window.UNDERDOG_STATS = {rows, totals, coverage, favoriteRows, favoriteTotals};
+}
+
 (async function(){
   // ---- Build the full-season week list, auto-updating from the live sheet feed ----
   // Precedence (mirrors index.html so the two pages agree):
@@ -454,6 +594,35 @@ function decideWeek(wk){
   const weeks = Object.values(byWeek).sort((a,b)=>a.week-b.week);
   weeks.sort((a,b)=>a.week-b.week);
   const weekNums=weeks.map(w=>w.week);
+  renderUnderdogs(weeks).catch(error=>{
+    document.getElementById('dogs-note').textContent = 'Underdog stats unavailable: '+error.message;
+    document.getElementById('favorites-biggest').textContent = 'Favorite stats unavailable: '+error.message;
+  });
+  const firstSelect=document.getElementById('h2h-first');
+  const secondSelect=document.getElementById('h2h-second');
+  for(const player of PLAYERS){ firstSelect.add(new Option(player,player)); secondSelect.add(new Option(player,player)); }
+  secondSelect.selectedIndex=PLAYERS.length>1?1:0;
+  function renderHeadToHead(){
+    const first=firstSelect.value,second=secondSelect.value;
+    document.getElementById('h2h-name-first').textContent=first;
+    document.getElementById('h2h-name-second').textContent=second;
+    const records=weeks.filter(week=>week.complete!==false && [first,second].every(player=>{
+      const result=week.results?.[player]; return result && result.w+result.l>0;
+    })).map(week=>({week:week.week,first:week.results[first].w,second:week.results[second].w}));
+    const firstWins=records.filter(row=>row.first>row.second).length;
+    const secondWins=records.filter(row=>row.second>row.first).length;
+    document.getElementById('h2h-summary').textContent=first===second?'Choose two different players.':`${first} ${firstWins} wins · ${second} ${secondWins} wins · ${records.length-firstWins-secondWins} draws`;
+    const body=document.querySelector('#h2h tbody');
+    body.replaceChildren();
+    if(first!==second) for(const row of records){
+      const tableRow=body.insertRow();
+      for(const value of [row.week,row.first,row.second,row.first===row.second?'Draw':row.first>row.second?first:second]) tableRow.insertCell().textContent=value;
+    }
+    if(first!==second && !records.length) document.getElementById('h2h-summary').textContent='No completed weeks with picks from both players yet.';
+  }
+  firstSelect.addEventListener('change',renderHeadToHead);
+  secondSelect.addEventListener('change',renderHeadToHead);
+  renderHeadToHead();
 
   // source badge (honest: live sheet vs committed), matching index.html's discipline
   (function(){
@@ -609,28 +778,12 @@ function decideWeek(wk){
       const top = Math.max(...arr.map(keyFn));
       return arr.filter(x=>keyFn(x)===top);
     }
-    const TIE_CAP = 4;   // show up to 4 tied teams inline, then "+N more" (still signals the tie)
     // Render a tendency line for a GROUP of tied teams that all share the same displayed record.
     // sharedRec = the "2-0 each" style suffix when every tied team has the same w-l; else per-team record.
     function tieChip(label, group, cls, extraFn){
-      if(!group.length) return "";
-      const n = group[0].n;                                   // sample size (same ranking key => may differ in acc)
-      const sameRec = group.every(x=>x.w===group[0].w && x.l===group[0].l);
-      const shown = group.slice(0, TIE_CAP);
-      const more = group.length - shown.length;
-      let teamsHtml;
-      if(sameRec){
-        teamsHtml = shown.map(x=>`${teamLogo(x.t)}${x.t}`).join(", ")
-          + (more>0?` <span class="muted">+${more} more</span>`:"")
-          + ` <span class="${cls}">${recOf(group[0])}${group.length>1?" each":""}</span>`
-          + (extraFn?` <span class="${cls}">${extraFn(group[0])}</span>`:"");
-      } else {
-        // same ranking key but different records -> list each with its own record
-        teamsHtml = shown.map(x=>`${teamLogo(x.t)}${x.t} <span class="${cls}">${recOf(x)}${extraFn?" "+extraFn(x):""}</span>`).join(", ")
-          + (more>0?` <span class="muted">+${more} more</span>`:"");
-      }
-      const nTxt = n<MIN_N ? ` <span class="lown">· low sample (${n})</span>` : ` <span class="muted">· ${n} pick${n===1?"":"s"}</span>`;
-      return `<span class="tt-item"><span class="k">${label}</span> ${teamsHtml}${nTxt}</span>`;
+      const teamsHtml = group.map(team=>`<div class="tt-team">${teamLogo(team.t)}<strong>${team.t}</strong>
+        <span class="${cls}">${recOf(team)}</span>${extraFn?`<span class="muted">(${extraFn(team)})</span>`:''}</div>`).join('');
+      return `<section class="tt-metric"><h3>${label}</h3>${teamsHtml||'<p>No qualifying team yet</p>'}</section>`;
     }
 
     function playerCard(p){
@@ -648,38 +801,44 @@ function decideWeek(wk){
       const overallAcc=Math.round(100*a.correct/a.picks);
 
       const parts=[];
-      if(mostPicked.length) parts.push(tieChip("Most-picked", mostPicked, "trust"));
+      parts.push(tieChip("Backed most often", mostPicked, "", team=>`${team.n} picks`));
       // show Best team when it's meaningful (more than one qualified team, or it differs from most-picked)
-      const mpTeams = new Set(mostPicked.map(x=>x.t));
-      if(best.length && (qualified.length>1 || !best.every(x=>mpTeams.has(x.t)))) parts.push(tieChip("Best team", best, "trust", x=>`· ${x.acc}%`));
+      parts.push(tieChip(`Best results · ${MIN_N}+ picks`, best, "trust", team=>`${team.acc}% correct`));
       // worst only when the top-of-worst actually has a losing record
-      if(worst.length && worst[0].l>worst[0].w) parts.push(tieChip("Worst team", worst, "krypt", x=>`· ${x.acc}%`));
-      if(fadedMost.length) parts.push(tieChip("Fades most", fadedMost, "muted2"));
+      parts.push(worst.length && worst[0].l>worst[0].w
+        ? tieChip(`Trouble spots · ${MIN_N}+ picks`, worst, "krypt", team=>`${team.acc}% correct`)
+        : '<section class="tt-metric"><h3>Trouble spots</h3><p>No losing record among qualifying teams</p></section>');
+      parts.push(tieChip("Picked against most", fadedMost, "", team=>`${team.n} picks against`));
       // favorite / underdog lean (only if we had odds for enough games)
       if(a.fav.n+a.dog.n>0){
         const favTxt = a.fav.n? `favorites ${a.fav.w}/${a.fav.n} (${leanPct(a.fav)}%)` : "";
         const dogTxt = a.dog.n? `dogs ${a.dog.w}/${a.dog.n} (${leanPct(a.dog)}%)` : "";
         const lean = a.fav.n===0&&a.dog.n===0 ? "" :
           (a.fav.n>a.dog.n ? "leans FAVORITES" : a.dog.n>a.fav.n ? "leans UNDERDOGS" : "even fav/dog");
-        parts.push(`<span class="tt-item"><span class="k">Fav/Dog:</span> ${lean} <span class="muted">· ${[favTxt,dogTxt].filter(Boolean).join(", ")}</span></span>`);
+        parts.push(`<div class="tt-split"><strong>${lean}</strong><p>${[favTxt,dogTxt].filter(Boolean).join(" · ")}</p><span class="muted">Only games with scoreboard odds; see Underdog picks for closing-line records.</span></div>`);
       }
       // home / away lean
       if(a.home.n+a.away.n>0){
         const lean = a.home.n>a.away.n ? "leans HOME" : a.away.n>a.home.n ? "leans AWAY" : "even home/away";
-        parts.push(`<span class="tt-item"><span class="k">Home/Away:</span> ${lean} <span class="muted">· home ${a.home.w}/${a.home.n}, away ${a.away.w}/${a.away.n}</span></span>`);
+        parts.push(`<div class="tt-split"><strong>${lean.toLowerCase()}</strong><p>Home picks: ${a.home.w} correct of ${a.home.n} · Away picks: ${a.away.w} correct of ${a.away.n}</p></div>`);
       }
-      parts.push(`<span class="tt-item"><span class="k">Overall:</span> <span class="${overallAcc>=50?'trust':'krypt'}">${a.correct}/${a.picks} (${overallAcc}%)</span></span>`);
+      const selectedTeam=document.getElementById('ttTeam').value;
+      const detailTeams=[...new Set([...Object.keys(a.back),...Object.keys(a.fade)])].filter(team=>!selectedTeam||team===selectedTeam).sort();
+      parts.push(`<details class="tt-detail"${selectedTeam?' open':''}><summary>${selectedTeam?selectedTeam+' records':'See every team'}</summary>
+        <div class="grid-wrap"><table><caption>Correct–incorrect picks, when backing or opposing each team.</caption>
+        <thead><tr><th scope="col">Team</th><th scope="col">Picked to win</th><th scope="col">Picked against</th></tr></thead>
+        <tbody>${detailTeams.map(team=>`<tr><td>${teamLogo(team)}${team}</td><td>${a.back[team]?recOf(a.back[team]):'—'}</td><td>${a.fade[team]?recOf(a.fade[team]):'—'}</td></tr>`).join('')}</tbody></table></div></details>`);
 
       return `<div class="tt-card" data-player="${p}" data-acc="${overallAcc}" data-picks="${a.picks}">
         <div class="tt-head">${avatar(p)}<span class="nm">${p}</span>
-          <span class="muted" style="font-weight:400;font-size:12px">${a.picks} graded pick${a.picks===1?"":"s"} · ${overallAcc}%</span></div>
+          <span class="tt-overall"><strong>${overallAcc}% correct</strong>${a.correct} of ${a.picks} picks</span></div>
         <div class="tt-items">${parts.join("")}</div></div>`;
     }
 
     // control bar: filter by player + team, sort by player/accuracy/pick-count
     const teamsSeen=[...new Set(PLAYERS.flatMap(p=>Object.keys(T[p].back)))].sort();
     trBody.innerHTML =
-      `<div class="tt-controls">
+      `<p class="tt-intro">Records are your correct–incorrect picks, not the NFL team's record. “Picked against” means you chose their opponent; a correct pick means that opponent won. All tied teams are shown.</p><div class="tt-controls">
         <label>Player
           <select id="ttPlayer"><option value="">All</option>${PLAYERS.map(p=>`<option value="${p}">${p}</option>`).join("")}</select></label>
         <label>Team
@@ -691,7 +850,7 @@ function decideWeek(wk){
           </select></label>
       </div>
       <div class="tt-list" id="ttList"></div>
-      <div class="note" style="margin-top:6px">Favorite/underdog uses ESPN pregame odds and only counts games that had a line; small samples are flagged (min ${MIN_N} picks to rank a team).</div>`;
+      <div class="note" style="margin-top:12px">Best results and trouble spots require at least ${MIN_N} picks for a team. Selecting a team opens its records; summary highlights still cover the full season.</div>`;
 
     const ttList=document.getElementById("ttList");
     function renderTend(){
@@ -723,6 +882,7 @@ function decideWeek(wk){
     `Standings accumulate automatically as weeks finish — picks come from the shared Google Sheet and every week is graded live from ESPN, `+
     `so a completed week appears here on its own (no manual edits). If the sheet feed is unavailable, the page falls back to the committed `+
     `<code>picks.js</code> + <code>season.js</code> so it never blanks.`;
+  document.getElementById('load-status').textContent='Picks/results loaded '+new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'}).format(new Date())+' CT · closing-line coverage below';
 })();
 </script>
 </body>
