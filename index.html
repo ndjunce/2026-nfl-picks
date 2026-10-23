@@ -596,24 +596,27 @@ function indexGames(data){
     const s1 = parseInt(t1.score||0,10), s2 = parseInt(t2.score||0,10);
     const state = st.state || "pre";
     // ---- win probability (per team abbr, 0..1) + which source we used (honest labeling) ----
-    // Priority: (1) ESPN live win% while in-progress, (2) pregame odds spread -> logistic,
-    // (3) in-progress score+time heuristic, (4) 50/50 not-started. probSource is null if none.
+    // Live games require a valid ESPN live probability; spread odds are pregame only.
+    // Unknown games use even scenario weights internally, never a displayed forecast.
     const A = a1.toUpperCase(), B = a2.toUpperCase();
     let winProb = null, probSource = null;
     // (1) ESPN live win probability (only present on some in-progress feeds)
     const espnP = c.situation && c.situation.lastPlay && c.situation.lastPlay.probability;
-    if(state === "in" && espnP && espnP.homeWinPercentage != null){
+    if(state === "in" && espnP && Number.isFinite(espnP.homeWinPercentage)
+       && espnP.homeWinPercentage >= 0 && espnP.homeWinPercentage <= 1){
       // homeAway tells us which competitor is home
       const homeAbbr = (t1.homeAway === "home" ? A : B);
       const awayAbbr = (homeAbbr === A ? B : A);
-      const hp = Math.max(0, Math.min(1, espnP.homeWinPercentage));
+      const hp = espnP.homeWinPercentage;
       winProb = { [homeAbbr]: hp, [awayAbbr]: 1 - hp };
       probSource = "espn-live";
     }
-    // (2) pregame odds: spread + which side favored (details string carries the fav abbr)
-    if(!winProb){
+    // (2) Odds are only used before kickoff, never as a fallback for a live game.
+    if(!winProb && state === "pre"){
       const od = (c.odds && c.odds[0]) ? c.odds[0] : null;
-      const sp = od && (od.spread != null) ? Math.abs(Number(od.spread)) : null;
+      const rawSpread = od && od.spread;
+      const sp = (typeof rawSpread === "number" || typeof rawSpread === "string")
+        && String(rawSpread).trim() !== "" ? Math.abs(Number(rawSpread)) : null;
       let favAbbr = null;
       if(od){
         if(od.homeTeamOdds && od.homeTeamOdds.favorite) favAbbr = (t1.homeAway === "home" ? A : B);
@@ -623,8 +626,8 @@ function indexGames(data){
           if(mm && (mm[1]===A || mm[1]===B)) favAbbr = mm[1];
         }
       }
-      if(sp != null && favAbbr){
-        // NFL spread -> win prob (logistic fit; ~ -3 => 60%, -7 => 71%, -10 => 78%). Cap 50..92%.
+      if(Number.isFinite(sp) && favAbbr){
+        // Existing approximate spread curve: -3 => 60%, -7 => 73%, -10 => 80%. Cap 50..92%.
         const p = 1 / (1 + Math.exp(-0.14 * sp));
         const pf = Math.max(0.5, Math.min(0.92, p));
         const dogAbbr = favAbbr === A ? B : A;
@@ -632,15 +635,7 @@ function indexGames(data){
         probSource = "odds-spread";
       }
     }
-    // (3) in-progress fallback from score margin + time when no prob source above
-    if(!winProb && state === "in"){
-      const lead = s1 - s2;                          // A minus B
-      // crude: each point of lead ~ +3% toward the leader, centered at 50%
-      let pA = 0.5 + Math.max(-0.42, Math.min(0.42, lead * 0.03));
-      winProb = { [A]: pA, [B]: 1 - pA };
-      probSource = "live-score";
-    }
-    // (4) not-started, no odds -> even
+    // (3) No valid source: keep all outcomes possible, but hide forecast percentages.
     if(!winProb){
       winProb = { [A]: 0.5, [B]: 0.5 };
       probSource = "even";
@@ -718,9 +713,10 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   // Each undecided game contributes a probability that a given side wins; we enumerate
   // all outcome combinations, weight by product of chosen-side probs, and tally who wins.
   const k = undecided.length;
-  const anyProb = undecided.some(o=>o.info && o.info.probSource && o.info.probSource!=="even")
-    || finals.length>0;   // if games are final we can still show NEEDS; prob source flagged below
-  const hasProbSource = undecided.some(o=>o.info && o.info.probSource && o.info.probSource!=="even");
+  // Pool percentages require coverage of every undecided game. Partial coverage
+  // must not silently turn an unknown live game into a 50/50 forecast.
+  const hasProbSource = undecided.length>0 && undecided.every(o=>
+    o.info && (o.info.probSource==="espn-live" || o.info.probSource==="odds-spread"));
 
   const winShare = {}; players.forEach(p=>winShare[p]=0);
   // conditional win-share: for each undecided game i and player p, credit summed over scenarios
@@ -856,7 +852,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     const _tbg = (typeof PICKS!=="undefined" && PICKS.tiebreakerGame) ? PICKS.tiebreakerGame : null;
     const tbKey = _tbg ? mkey(_tbg.team1, _tbg.team2) : null;
     const matters = [];
-    if(enumerated && !eliminated && !clinched){
+    if(enumerated && hasProbSource && !eliminated && !clinched){
       for(let i=0;i<undecided.length;i++){
         const o = undecided[i];
         const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
@@ -897,7 +893,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     return {
       name:p, correct:cur, remaining:rem, maxPossible:mx,
       eliminated, clinched,
-      winPct: enumerated ? winShare[p] : null,
+      winPct: enumerated && hasProbSource ? winShare[p] : null,
       winCnt: WC[p]||0,
       neededAll: required, neededHelpful: helpful, pickedLiveGames: myGames,
       mattersToMe: mattersFiltered,
@@ -943,6 +939,10 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   // If we didn't enumerate (no games / too many), fall back to split-size only (no intensity %).
   function intensityFor(i, p, pickedA){
     if(!enumerated) return { tag:"minor", swing:null };
+    if(!hasProbSource){
+      const required = (WC[p]||0)>0 && (WMISS[i]?.[p]||0)===0 && (WHIT[i]?.[p]||0)>0;
+      return { tag:required?"must":"minor", swing:null };
+    }
     const shareIfWin  = pickedA ? condA[i][p] : condB[i][p];   // credit when P's side won
     const shareIfLose = pickedA ? condB[i][p] : condA[i][p];   // credit when P's side lost
     // normalize to conditional probabilities (divide by the prob mass of each branch)
@@ -1153,14 +1153,16 @@ function renderPathToWin(gamesOut, opts){
 
   // ===== NOT-STARTED or MID: game-first rooting view =====
   const est = ctx.enumerated && ctx.hasProbSource
-    ? `Intensity 🔥/⚠️/· from win-probability swing (betting-line based, rough <b>ESTIMATE</b>).`
-    : `Showing rooting split + who's eliminated (no live win-probability source, so no % intensity).`;
+    ? `Intensity 🔥/⚠️/· from available game probabilities (rough <b>ESTIMATE</b>).`
+    : `Win percentages unavailable: one or more remaining games lack a valid probability source. Required games, rooting splits and elimination scenarios still update.`;
   const banner = ctx.state==="notstarted"
     ? `<div class="ptw-banner">🟢 Week not started — all ${ctx.totalGames} games ahead, everyone alive. Here's who's pulling for what. <span class="muted" style="font-weight:400">${est}</span></div>`
     : `<div class="ptw-banner">${ctx.finalsCount} of ${ctx.totalGames} final — decided games drop off; rooting + must-win update live. <span class="muted" style="font-weight:400">${est}</span></div>`;
 
   // legend
-  const legend = `<div class="ptw-legend">🔥 must-win · ⚠️ big swing · · minor · <span class="muted">games sorted most-decisive first</span></div>`;
+  const legend = ctx.hasProbSource
+    ? `<div class="ptw-legend">🔥 must-win · ⚠️ big swing · · minor · <span class="muted">games sorted most-decisive first</span></div>`
+    : `<div class="ptw-legend">🔥 required to stay alive · · other picks · <span class="muted">rooting splits and required games only</span></div>`;
 
   // ---- "How the % is calculated" explainer (collapsible; sits below banner, above each player's path) ----
   const pctExplain = `<details class="pct-explain"><summary>How the win % is calculated</summary>
@@ -1168,10 +1170,9 @@ function renderPathToWin(gamesOut, opts){
       <b>Exact enumeration over the remaining games.</b>
       <h4>1) Each undecided game gets a win probability for each side, from this hierarchy:</h4>
       <ul>
-        <li>ESPN's live win % if the game is in progress, else</li>
-        <li>pregame betting odds — the spread converted to a probability via a logistic curve (~-3 spread = 60%, -7 = 71%, -10 = 78%, capped 50–92%), else</li>
-        <li>a live score + time-left heuristic, else</li>
-        <li>50/50 if there's no odds source.</li>
+        <li>For an in-progress game: a valid ESPN live win probability.</li>
+        <li>Before kickoff: a spread-based approximation (~-3 = 60%, -7 = 73%, -10 = 80%, capped 50–92%).</li>
+        <li>If any remaining game lacks a source, pool percentages and probability-based swing tags are hidden. Exact required-game scenarios still work.</li>
       </ul>
       <h4>2) It enumerates every possible combination of outcomes.</h4>
       With <b>k</b> undecided games that's <b>2<sup>k</sup></b> scenarios — every way the games could break. For each scenario it:
@@ -1191,7 +1192,7 @@ function renderPathToWin(gamesOut, opts){
       <h4>The 🔥 / ⚠️ / · intensity tags</h4>
       come from the same enumeration — how much a specific game swings your win-share (scenarios where one side wins vs the other). A <b>must-win</b> is a game where you lose almost all your winning scenarios if that team loses.
       <h4>Honest limits</h4>
-      <span class="muted">It's exact (not simulated) when games ≤ 18, odds-aware, and pick-interaction-aware. It assumes games are independent (real ones correlate a bit) and the spread→probability curve is an approximation — so it's labeled an <b>ESTIMATE</b>, and the site flags when no real odds source is available (falls back to 50/50).</span>
+      <span class="muted">It's exact (not simulated) when games ≤ 18, odds-aware, and pick-interaction-aware. It assumes games are independent (real ones correlate a bit) and the spread→probability curve is an approximation — so it's labeled an <b>ESTIMATE</b>, and hides percentages when any remaining game's probability is unavailable.</span>
     </div>
   </details>`;
 

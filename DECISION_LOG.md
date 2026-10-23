@@ -314,3 +314,16 @@ Live bug: on the CURRENT week before anyone entered picks, the "Each player's pa
 
 ## 2026-10-19 — Combined stats release approved
 - Owner reviewed local preview and explicitly approved publication ("looks good, publish"). Publishing favorites/underdogs, tendencies layout, head-to-head, pick distributions, refresh/status and historical-line caching together as one reviewed commit. Remote main verified unchanged at 2fef091; safety tag good-pre-redesign points there. Only index.html, stats.html and this log included; pre-existing untracked worktrees/prompt excluded. Local verification evidence and real numbers are recorded above. Live deployment verification follows publication.
+
+## 2026-10-19 — Master audit probability correctness fix (local only)
+- Fixed live probability source selection: valid finite ESPN live probability required during play; spread approximation only before kickoff. Removed score-only pseudo-live forecast. Invalid/out-of-range live values and malformed spreads are unavailable.
+- Pool percentages and probability-based swing displays require every undecided game to have a valid source. Otherwise exact required-game/elimination/rooting scenarios remain available, with explicit unavailable copy. No grading, picks, Sheet, tiebreak rules or fitted coefficient changes.
+- Eight focused actual-function checks pass (inline syntax, pregame curve, live/endpoints/invalid inputs, partial/full coverage, factual grading/path regression). Local safety tag codex-audit-pre-probability-20261019; branch codex/picks-probability-20261019. No commit/push/deployment. Browser validation pending. Detail: fantasy_football_project/docs/audits/2026-10-19/CONTINUATION.md.
+
+## 2026-10-23 — Probability correction publication review — WORKS locally / approval OPEN
+- Confirmed fetched origin/main and safety tag still8b0424c; public source still has old score-only live fallback and lacks full-coverage guard. Correction remains unpublished. Estimate banner clarified to available game probabilities (ESPN live or pregame spread).
+- Corrected private regression harness reference: previous test could compare patched working file against itself; now independent baseline is git show origin/main:index.html and candidate is actual working file. All8 checks pass, including factual parity with main. Expanded deterministic browser checks: missing/full/mixed source coverage at1280/390 passes, no overflow or page JS errors. External requests blocked; not a fresh live-feed validation claim.
+- READY for owner approval: exact public commit scope index.html + DECISION_LOG.md only. No grading/Sheet/stats changes or private selections included; existing dirty/untracked artifacts preserved. No commit/push/deploy authorized/performed. Detail: fantasy_football_project/docs/audits/2026-10-19/PICKS_PUBLICATION_REVIEW_20261023.md.
+
+## 2026-10-23 — Probability correction publication approved
+- Owner reviewed localhost8769 preview and explicitly instructed push. Refetched main unchanged at8b0424c; safety tag codex-audit-pre-probability-20261019 preserves it. Publishing only index.html and DECISION_LOG.md in one correction commit; untracked worktrees/prompt and private selections excluded. Eight actual-function tests and six controlled browser modes passed as recorded above. Live deployment verification follows push.
