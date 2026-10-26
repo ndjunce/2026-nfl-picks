@@ -327,3 +327,8 @@ Live bug: on the CURRENT week before anyone entered picks, the "Each player's pa
 
 ## 2026-10-23 — Probability correction publication approved
 - Owner reviewed localhost8769 preview and explicitly instructed push. Refetched main unchanged at8b0424c; safety tag codex-audit-pre-probability-20261019 preserves it. Publishing only index.html and DECISION_LOG.md in one correction commit; untracked worktrees/prompt and private selections excluded. Eight actual-function tests and six controlled browser modes passed as recorded above. Live deployment verification follows push.
+
+## 2026-10-26 — Heartbreak section approved for publication
+- Owner explicitly requested publishing ONLY Heartbreak after reviewing the local preview. Added stats-page season counts and completed-week details for participants tied on most correct who lost on the actual closest-total tiebreaker. Uses existing decideWeek; over is allowed, shared winners and ordinary pick-count losses excluded, missing tied-leader evidence marked unknown. No scoring-rule changes.
+- Verified actual Week5 Riley loss (57 vs Bobby74, actual71, error-gap11) and Week6 Henry loss (55 vs Clyde52, actual40, error-gap3); Week7 incomplete excluded. Ten focused tests and desktop/mobile real-feed browser checks pass with no page errors or document overflow.
+- This release includes ONLY stats.html and this decision-log entry. Graph, reconstructed history, logger, workflow and private recommendations remain unpublished/local. Safety tag good-pre-heartbreak-20261026 preserves previous main9daad49. Post-deployment verification follows publication. Private detail: fantasy_football_project/docs/audits/2026-10-19/HEARTBREAK_AND_HISTORY_20261026.md.

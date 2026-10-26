@@ -95,6 +95,10 @@
   .tt-detail th,.tt-detail td{font-size:12px;padding:8px 4px;white-space:normal}
   .tt-detail td:first-child,.tt-detail th:first-child{text-align:left}
   .tt-detail caption{text-align:left;color:var(--mut);font-size:12px;padding:8px 0}
+  .hb-detail{border-top:1px solid var(--line);padding:12px 0}
+  .hb-detail summary{line-height:1.6;text-transform:none;letter-spacing:0;font-size:13px}
+  .hb-detail p{font-size:13px;color:var(--mut);margin:8px 0}
+  .hb-detail td,.hb-detail th{font-size:13px;padding:8px}
   @media(max-width:760px){.tt-list{grid-template-columns:1fr}}
   .tt-item{line-height:1.5}
   .tt-item .k{color:var(--mut);font-weight:800;margin-right:3px}
@@ -141,6 +145,14 @@
   <div class="card">
     <h2>🗓️ Week-by-Week Winners</h2>
     <div id="weekwinners" class="wk-list"></div>
+  </div>
+
+  <div class="card" id="heartbreak">
+    <h2>Heartbreak · lost on the tiebreaker</h2>
+    <p class="tt-intro">Tied for the most correct picks in a completed week, but another tied leader guessed closer to the actual total. Closest means absolute difference; going over is allowed. Equal closest guesses remain tied.</p>
+    <div class="grid-wrap"><table id="heartbreak-summary"><thead><tr><th>Player</th><th>Weeks lost on tiebreaker</th></tr></thead><tbody></tbody></table></div>
+    <div id="heartbreak-details"></div>
+    <div class="note" id="heartbreak-note"></div>
   </div>
 
   <div class="card">
@@ -430,6 +442,40 @@ function decideWeek(wk){
   return { winners:top, type:"tied", topW }; // no TB data -> shown as tied
 }
 
+function computeHeartbreak(weeks, decisions){
+  const totals=Object.fromEntries(PLAYERS.map(player=>[player,0]));
+  const records=[], unknown=[];
+  const valid=value=>(typeof value==='number'||typeof value==='string') && String(value).trim()!=='' && Number.isFinite(Number(value)) && Number(value)>=0;
+  for(const week of weeks){
+    const decision=decisions[week.week];
+    if(week.complete===false || !decision || !['tiebreaker','tied'].includes(decision.type)) continue;
+    const leaders=PLAYERS.filter(player=>week.results?.[player]?.w===decision.topW);
+    if(leaders.length<2) continue;
+    if(!valid(week.tbActual) || leaders.some(player=>!valid(week.tiebreaker?.[player]))){unknown.push(week.week);continue;}
+    if(!decision.winners.length || decision.winners.some(player=>!leaders.includes(player))){unknown.push(week.week);continue;}
+    const actual=Number(week.tbActual);
+    const guesses=leaders.map(player=>({player,guess:Number(week.tiebreaker[player]),error:Math.abs(Number(week.tiebreaker[player])-actual),winner:decision.winners.includes(player)}));
+    const winningError=Math.min(...guesses.filter(row=>row.winner).map(row=>row.error));
+    const losses=guesses.filter(row=>!row.winner && row.error>winningError).map(row=>({...row,margin:row.error-winningError}));
+    if(!losses.length) continue;
+    losses.forEach(row=>totals[row.player]++);
+    records.push({week:week.week,correct:decision.topW,actual,winners:decision.winners.slice(),winningError,guesses,losses});
+  }
+  return {totals,records,unknown};
+}
+
+function renderHeartbreak(weeks, decisions){
+  const data=computeHeartbreak(weeks,decisions);
+  const escape=value=>String(value).replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+  document.querySelector('#heartbreak-summary tbody').innerHTML=PLAYERS.map(player=>`<tr><td>${escape(player)}</td><td>${data.totals[player]}</td></tr>`).join('');
+  document.getElementById('heartbreak-details').innerHTML=data.records.map(record=>`<details class="hb-detail"><summary>Week ${record.week} · ${record.correct} correct · ${record.losses.map(row=>escape(row.player)).join(', ')} lost the tiebreaker</summary>
+    <p>Actual total: <b>${record.actual}</b> · ${record.winners.length>1?'Shared winners':'Winner'}: <b>${record.winners.map(escape).join(' & ')}</b>. Everyone below tied for the most correct picks.</p>
+    <div class="grid-wrap"><table><thead><tr><th>Player</th><th>Guess</th><th>Off by</th><th>Result</th></tr></thead><tbody>${record.guesses.map(row=>`<tr><td>${escape(row.player)}</td><td>${row.guess}</td><td>${row.error}</td><td>${row.winner?'Winner':`Lost by ${row.error-record.winningError}`}</td></tr>`).join('')}</tbody></table></div>
+    <p>“Lost by” is the gap between your absolute error and the winning error, in total-score points.</p></details>`).join('') || '<p class="tt-intro">No verified tiebreaker heartbreaks in the available completed weeks.</p>';
+  document.getElementById('heartbreak-note').textContent='Only finalized weeks count. Shared winners and ordinary pick-count losses are excluded. '+(data.unknown.length?`Unknown tiebreaker evidence in Week ${data.unknown.join(', ')}; excluded from these counts. `:'')+'Uses available historical results; a zero means no verified heartbreak, not proof missing history is complete.';
+  window.HEARTBREAK_STATS=data;
+}
+
 async function renderUnderdogs(weeks){
   const rows = [];
   const favoriteRows = [];
@@ -651,6 +697,7 @@ async function renderUnderdogs(weeks){
       const topW=dec.topW; PLAYERS.forEach(p=>{ if((wk.results[p]||{w:-1}).w===topW) tot[p].tbShots++; });
     }
   });
+  renderHeartbreak(weeks,decisions);
   // current win streak: consecutive most-recent AWARDED weeks won (outright or TB). An in-progress
   // ("incomplete") week is NOT a decided week — exclude it so it neither counts nor breaks streaks.
   const AWARDED = t => t==="outright" || t==="tiebreaker" || t==="tied";
