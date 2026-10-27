@@ -64,7 +64,7 @@
     const breaks=axis.breaks.map(gap=>`<g data-time-break><title>Skipped time: ${escape(time(gap.start))} to ${escape(time(gap.end))}</title><line x1="${(x(gap.start)+x(gap.end))/2}" x2="${(x(gap.start)+x(gap.end))/2}" y1="30" y2="230" stroke="#8f9cb0" stroke-dasharray="2 5"/><text x="${(x(gap.start)+x(gap.end))/2}" y="247" text-anchor="middle" fill="#ffd23f" font-size="14">»</text></g>`).join('');
     const days=axis.breaks.filter(gap=>gap.end-gap.start>3*3600000).map(gap=>`<text x="${Math.max(95,Math.min(right-45,x(gap.end)+35))}" y="20" text-anchor="middle" fill="#8f9cb0" font-size="11">${escape(new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',weekday:'short',month:'numeric',day:'numeric'}).format(new Date(gap.end)))}</text>`).join('');
     const reconstructed=data.kind==='reconstruction';
-    element.innerHTML=`${reconstructed?`<p style="padding:10px;border:1px solid #ffd23f;color:#ffd23f;font-size:13px"><b>RECONSTRUCTED ESTIMATE — not recorded site history.</b> Current public picks replayed against retained pregame quotes and ESPN play-level probabilities. This does not prove what the site showed at the time.</p><details style="font-size:13px"><summary>Reconstruction assumptions and sources</summary><p>${escape(data.method||'')}</p><ul>${(data.limitations||[]).map(item=>`<li>${escape(item)}</li>`).join('')}</ul><p>Generated ${escape(time(data.generatedAt))}. Original recorded snapshots are kept separately.</p></details>`:''}<p class="note" style="text-align:left">${location.hostname==='127.0.0.1'||location.hostname==='localhost'?'Local preview. ':''}Week ${data.week} · ${reconstructed?'reconstruction begins':'shared history starts'} ${escape(time(points[0].at))}. ${valid.length} valid ${reconstructed?'retrospective estimates':'observations'}. Latest ${reconstructed?'replayed time':'capture'}: ${escape(time(points.at(-1).at))}${!reconstructed&&Date.now()-last>30*60000?' · history may be stale':''}.</p>
+    element.innerHTML=`${reconstructed?`<p style="padding:10px;border:1px solid #ffd23f;color:#ffd23f;font-size:13px"><b>RECONSTRUCTED ESTIMATE — not recorded site history.</b> Archived public picks replayed against archived odds and ESPN play-level probabilities. This does not prove what the site showed at the time.</p><details style="font-size:13px"><summary>Reconstruction assumptions and sources</summary><p>${escape(data.method||'')}</p><ul>${(data.limitations||[]).map(item=>`<li>${escape(item)}</li>`).join('')}</ul><p>Generated ${escape(time(data.generatedAt))}. Original recorded snapshots are kept separately.</p></details>`:''}<p class="note" style="text-align:left">${location.hostname==='127.0.0.1'||location.hostname==='localhost'?'Local preview. ':''}Week ${data.week} · ${reconstructed?'reconstruction begins':'shared history starts'} ${escape(time(points[0].at))}. ${valid.length} valid ${reconstructed?'retrospective estimates':'observations'}. Latest ${reconstructed?'replayed time':'capture'}: ${escape(time(points.at(-1).at))}${!reconstructed&&Date.now()-last>30*60000?' · history may be stale':''}.</p>
       ${valid.length?`<p class="note" style="text-align:left">Game-time view · idle time and long gaps are compressed (»). Tap the chart or use the controls below for the actual time. Missing observations remain breaks in the lines. On a phone, swipe the chart sideways.</p><div style="overflow-x:auto"><svg viewBox="0 0 ${width} 275" role="img" aria-label="Each player's saved weekly win percentage on a compressed timeline" style="display:block;width:100%;height:auto;min-width:600px">${grid}${curves}${breaks}${days}<text x="45" y="263" fill="#8f9cb0" font-size="11">${escape(time(points[0].at))}</text>${last!==first?`<text x="${right}" y="275" text-anchor="end" fill="#8f9cb0" font-size="11">${escape(time(points.at(-1).at))}</text>`:''}</svg></div>`:'<p class="note">No reliable percentages captured yet. Unavailable odds are recorded as gaps.</p>'}
       <div id="history-names" data-name-labels style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;font-size:13px"></div><label style="display:block;margin-top:12px;font-size:13px">Inspect observation <input id="history-point" type="range" min="0" max="${points.length-1}" value="${points.length-1}" style="width:100%"></label><div id="history-values" role="status" style="font-size:13px"></div>`;
     const slider=element.querySelector('#history-point');
@@ -76,7 +76,7 @@
     }
     if(reconstructed){
       const notice=document.createElement('p');notice.style.cssText='font-size:13px;color:#ffd23f';
-      notice.textContent=(finalResult?'Full-week replay through MNF. The final 100%/0% endpoint is the settled result, not an earlier forecast.':'Partial replay ends '+time(points.at(-1).at)+'. Later game action and the final weekly result are not included.')+' Alternating colors mark identical shared lines; percentages are unchanged.';
+      notice.textContent=(finalResult?'Full-week replay through the final game. The final 100%/0% endpoint is the settled result, not an earlier forecast.':'Partial replay ends '+time(points.at(-1).at)+'. Later game action and the final weekly result are not included.')+' Alternating colors mark identical shared lines; percentages are unchanged.';
       element.prepend(notice);
     }
     slider.value=String(Math.min(points.length-1,selections.get(data)??points.length-1));
@@ -144,9 +144,8 @@
     try{
       const response=await fetch(`${base}data/win-history/${key}.json`,{cache:'no-store',signal:AbortSignal.timeout(15000)});
       if(active!==request)return;
-      if(response.status===404){element.textContent='No shared history recorded yet for this week. Earlier percentages were not saved; nothing is backfilled.';return;}
-      if(!response.ok)throw new Error('History request failed');
-      const data=await response.json();if(active!==request)return;
+      if(!response.ok&&response.status!==404)throw new Error('History request failed');
+      const data=response.status===404?{version:1,season:Number(season),week:Number(week),players:[],points:[]}:await response.json();if(active!==request)return;
       if(data.season!==Number(season)||data.week!==Number(week))throw new Error('History week mismatch');
       render(data,element);
       try{
@@ -157,12 +156,13 @@
         const label=document.createElement('label');label.textContent='History view: ';label.style.fontSize='13px';
         const select=document.createElement('select');select.id='history-mode';
         select.style.cssText='background:#0b0f16;color:#f2f6fb;padding:8px;border:1px solid #28313f;border-radius:6px;max-width:100%';
-        select.add(new Option('Recorded live snapshots','recorded'));
-        select.add(new Option('Reconstructed earlier Week '+week+' (estimate)','reconstruction'));
-        select.value=keepReconstruction?'reconstruction':'recorded';
+        const capturedOption=new Option(data.points.length?'Recorded live snapshots':'Recorded snapshots — none saved','recorded');
+        select.add(capturedOption);
+        select.add(new Option('Reconstructed Week '+week+' (estimate)','reconstruction'));
+        select.value=keepReconstruction||!data.points.length?'reconstruction':'recorded';
         select.addEventListener('change',()=>render(select.value==='recorded'?data:reconstruction,element));
         label.appendChild(select);modes.appendChild(label);
-        if(keepReconstruction)render(reconstruction,element);
+        if(select.value==='reconstruction')render(reconstruction,element);
       }catch(error){}
     }catch(error){if(active===request)element.textContent='Shared history unavailable right now. Live Path to Win above still updates independently.';}
   }
