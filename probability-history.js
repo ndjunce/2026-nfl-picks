@@ -56,7 +56,7 @@
     const grid=[0,.25,.5,.75,1].map(value=>`<line x1="45" x2="${right}" y1="${y(value)}" y2="${y(value)}" stroke="#28313f"${value===.5?' stroke-dasharray="5 5"':''}/><text x="36" y="${y(value)+4}" text-anchor="end" fill="#8f9cb0" font-size="12">${value*100}%</text>`).join('');
     const sharedPaths=new Map();
     data.players.forEach((player,index)=>segments(points,player).forEach(segment=>{
-      const coordinates=segment.map(point=>`${x(point.at)},${y(point.value)}`).join(' ');
+      const coordinates=segment.length===1?`${x(segment[0].at)-6},${y(segment[0].value)} ${x(segment[0].at)+6},${y(segment[0].value)}`:segment.map(point=>`${x(point.at)},${y(point.value)}`).join(' ');
       if(!sharedPaths.has(coordinates))sharedPaths.set(coordinates,[]);
       sharedPaths.get(coordinates).push({player,index});
     }));
@@ -71,7 +71,7 @@
     if(finalResult){
       const result=finalResult,notice=document.createElement('p');
       notice.style.cssText='padding:12px;border:1px solid #33e08a;border-radius:6px;color:#33e08a;font-weight:700';
-      notice.textContent='🏆 '+result.winners.join(' & ')+' won Week '+data.week+' · '+result.correct+'/'+result.totalGames+' correct · '+(result.decidedBy==='tiebreaker'?'tiebreaker total '+result.tiebreakerActual:'most correct picks')+'. Final '+time(result.at)+'.';
+      notice.textContent='🏆 '+result.winners.join(' & ')+' won Week '+data.week+' · '+result.correct+'/'+result.totalGames+' correct · '+(result.decidedBy==='tiebreaker'?'tiebreaker total '+result.tiebreakerActual:'most correct picks')+'. '+(data.kind==='reconstruction'?'Final ':'Result captured ')+time(result.at)+'.';
       element.prepend(notice);
     }
     if(reconstructed){
