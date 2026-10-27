@@ -318,6 +318,15 @@
   </div>
 
   <div class="card">
+    <details id="win-history-panel">
+    <summary style="cursor:pointer;font-size:13px;font-weight:700;color:var(--mut)">Weekly win probability history <span style="font-weight:400">— tap to expand</span></summary>
+    <div id="history-modes" style="margin-top:12px"></div>
+    <div id="probability-history">Loading shared history…</div>
+    <div class="note" style="text-align:left">Same estimates as Each player's path, recorded after everyone has submitted their public picks. Shared automatic captures target every 10 minutes, even with browsers closed; scheduler/CDN delays are possible. Gaps mark missing sources, long capture gaps, changed picks or calculation changes. Feed failures leave gaps even if this browser has fallback picks. Equal shares of unresolved ties follow the existing calculation, not a separate prediction of the tiebreaker. No earlier history is invented.</div>
+    </details>
+  </div>
+
+  <div class="card">
     <h2>🏆 Leaderboard</h2>
     <div class="lb" id="leaderboard"></div>
     <div class="tiebreak" id="tiebreak"></div>
@@ -337,6 +346,7 @@
 <!-- picks.js = the current (live) week; season.js = archived past weeks (both drive the week tabs) -->
 <script src="picks.js"></script>
 <script src="season.js"></script>
+<script src="probability-history.js"></script>
 <script>
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 
@@ -1087,6 +1097,7 @@ function homeAwayChipHtml(playerName, gamesOut){
 // week's PICKS.* (correct for the live view). Fixes B1: an archived week was always reading the live
 // week's tiebreaker game/preds, so its tie could never resolve or be labelled as a tiebreaker win.
 function renderPathToWin(gamesOut, opts){
+  if(window.ProbabilityHistory) window.ProbabilityHistory.update(PICKS.season,selectedWeek);
   const el = document.getElementById("pathtowin"); if(!el) return;
   const players = (opts && opts.players) || PICKS.players;
   const tbPreds = (opts && opts.tbPreds) || PICKS.tiebreaker || {};

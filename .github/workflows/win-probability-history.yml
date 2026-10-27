@@ -1,0 +1,33 @@
+name: Shared win probability history
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: shared-win-probability-history
+  cancel-in-progress: false
+jobs:
+  capture:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/log-win-probability.cjs
+      - name: Save shared observations
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(data/win-history/*.json)
+          if [ ${#files[@]} -eq 0 ]; then exit 0; fi
+          git add -- "${files[@]}"
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Record shared weekly win probabilities'
+          git push origin HEAD:main
