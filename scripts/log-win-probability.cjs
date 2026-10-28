@@ -58,8 +58,22 @@ async function main(){
   const feedUrl=source.match(/jsonUrl:\s*"([^"]+)"/)?.[1];
   if(!feedUrl) throw new Error('Public picks feed not configured');
   const [feed,current]=await Promise.all([json(feedUrl),json('https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard')]);
-  const season=Number(current.season?.year),week=Number(current.week?.number);
+  const season=Number(current.season?.year);
+  let week=Number(current.week?.number),scoreboard=current;
   if(season!==Number(feed.season)||!Number.isInteger(week)||week<1||week>18||Number(current.season?.type)!==2) throw new Error('Season/week mismatch or not regular season');
+  // ESPN may leave the completed prior week as its default after all next-week
+  // picks arrive. Start the next week only when every public player picked its slate.
+  const next=feed.weeks?.[week+1];
+  const priorComplete=Array.isArray(current.events)&&current.events.length>0&&current.events.every(event=>
+    !!(event.competitions?.[0]?.status?.type?.completed));
+  const nextComplete=Array.isArray(next?.games)&&next.games.length>0&&Array.isArray(feed.players)&&
+    next.games.every(game=>feed.players.every(player=>[game.team1,game.team2].includes(game.picks?.[player])));
+  if(priorComplete&&nextComplete&&week<18){
+    const upcoming=await json(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${season}&seasontype=2&week=${week+1}`);
+    if(Number(upcoming.season?.year)!==season||Number(upcoming.week?.number)!==week+1) throw new Error('Next-week scoreboard mismatch');
+    week++;
+    scoreboard=upcoming;
+  }
   const directory=path.join(ROOT,'data','win-history');
   fs.mkdirSync(directory,{recursive:true});
   for(const number of [week-1,week].filter(value=>value>=1)){
@@ -79,11 +93,11 @@ async function main(){
     }));
     if(Object.values(tiebreaker).some(value=>value!==null&&!Number.isFinite(value))) throw new Error('Invalid public tiebreaker');
     const picks={season,week:number,players,games,tiebreaker,tiebreakerGame:raw.tiebreakerGame||games.at(-1)};
-    const scoreboard=number===week?current:await json(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${season}&seasontype=2&week=${number}`);
-    if(Number(scoreboard.season?.year)!==season||Number(scoreboard.week?.number)!==number) throw new Error('Scoreboard week mismatch');
+    const board=number===week?scoreboard:await json(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${season}&seasontype=2&week=${number}`);
+    if(Number(board.season?.year)!==season||Number(board.week?.number)!==number) throw new Error('Scoreboard week mismatch');
     const history=existing||{version:1,season,week:number,players,points:[]};
     if(history.version!==1||JSON.stringify(history.players)!==JSON.stringify(players)) throw new Error('History roster/schema changed; preserve existing file');
-    const record=observation(source,picks,scoreboard);
+    const record=observation(source,picks,board);
     if(append(history,record)){
       const temporary=file+'.tmp';
       fs.writeFileSync(temporary,JSON.stringify(history)+'\n');

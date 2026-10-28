@@ -138,7 +138,7 @@
 </div>
 
 <script>
-const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN = "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 const PLAYERS = ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
 
 // team logo (ESPN CDN) with abbr fallback; player photo (/players/<name>.jpg) with initials fallback
@@ -284,7 +284,12 @@ function downloadOut(){ const t=document.getElementById("out"); if(!t.value){gen
 (async function(){
   try{
     const res=await fetch(ESPN,{cache:"no-store"});
-    if(res.ok){ const d=await res.json(); if(d.week&&d.week.number) document.getElementById("week").value=d.week.number;
+    if(res.ok){ const d=await res.json(); if(d.week&&d.week.number){
+        const allFinal=Array.isArray(d.events)&&d.events.length>0&&d.events.every(event=>
+          !!(event.competitions&&event.competitions[0]&&event.competitions[0].status&&
+            event.competitions[0].status.type&&event.competitions[0].status.type.completed));
+        document.getElementById("week").value=allFinal&&d.week.number<18?d.week.number+1:d.week.number;
+      }
       if(d.season&&d.season.year) document.getElementById("season").value=d.season.year; }
   }catch(e){}
   loadGames();

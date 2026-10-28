@@ -348,7 +348,7 @@
 <script src="season.js"></script>
 <script src="probability-history.js"></script>
 <script>
-const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN = "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 
 /* ============================================================================
    GOOGLE SHEET PICKS SOURCE — Apps Script WEB APP (one JSON URL for the season).
@@ -445,7 +445,11 @@ async function fetchCurrentNflWeek(){
     const data = await res.json();
     const wk = data && data.week && data.week.number;
     const seasonYr = data && data.season && data.season.year;
-    if(wk) return { week: Number(wk), season: seasonYr || null };
+    const events = data && data.events;
+    if(wk) return { week: Number(wk), season: seasonYr || null,
+      complete: Array.isArray(events) && events.length>0 && events.every(event=>
+        !!(event.competitions && event.competitions[0] && event.competitions[0].status &&
+          event.competitions[0].status.type && event.competitions[0].status.type.completed)) };
     return null;
   }catch(e){ console.warn("current NFL week lookup failed:", e.message); return null; }
 }
@@ -1657,6 +1661,14 @@ async function boot(){
   LIVE_WEEK = (nfl && nfl.week)
             || (committedPicks && committedPicks.week)     // pre-sheet the site used picks.js.week
             || 1;
+  // ESPN can keep the completed prior week as its default scoreboard after the next
+  // week's picks are submitted. Move ahead only one week, and only with a full slate.
+  const next = tabs[LIVE_WEEK+1];
+  if(nfl && nfl.complete && next && Array.isArray(next.games) && next.games.length>0 &&
+     next.games.every(g=>SHEET.players.every(p=>
+       [g.team1,g.team2].includes(String(g.picks && g.picks[p] || '').toUpperCase())))){
+    LIVE_WEEK++;
+  }
   if(nfl && nfl.season) SHEET.season = nfl.season;
 
   // Choose the LIVE week's data (window.PICKS): sheet-with-picks for LIVE_WEEK > committed picks.js

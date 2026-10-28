@@ -194,7 +194,7 @@
 <script src="picks.js"></script>
 <script src="season.js"></script>
 <script>
-const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN = "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 const PLAYERS = (window.SEASON && SEASON.players) || (window.PICKS && PICKS.players) || ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
 function mkey(a,b){ return [a.toUpperCase(),b.toUpperCase()].sort().join("|"); }
 function photoUrl(n){ return `players/${String(n).toLowerCase()}.jpg`; }
@@ -518,7 +518,7 @@ async function renderUnderdogs(weeks){
           }
         }catch(error){}
         if(!line){
-          const summary = await fetchJson(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${job.event.id}`);
+          const summary = await fetchJson(`https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${job.event.id}`);
           line = (summary.pickcenter||[]).find(odds => String(odds.provider?.id)==='100');
         }
         const homeLine = line?.pointSpread?.home?.close?.line;
