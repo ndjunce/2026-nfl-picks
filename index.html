@@ -346,6 +346,7 @@
 <!-- picks.js = the current (live) week; season.js = archived past weeks (both drive the week tabs) -->
 <script src="picks.js"></script>
 <script src="season.js"></script>
+<script src="spread-scoring.js"></script>
 <script src="probability-history.js"></script>
 <script>
 const ESPN = "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
@@ -388,14 +389,15 @@ function normalizeWeek(raw, weekNum){
   const up = s => String(s==null?"":s).trim().toUpperCase();
   const games = raw.games.map(g=>{
     const picks={}; SHEET.players.forEach(p=>{ picks[p] = up((g.picks||{})[p]); });
-    return { team1:up(g.team1), team2:up(g.team2), picks };
+    return { team1:up(g.team1), team2:up(g.team2), picks,
+      team2Spread:(g.lineLocked===true||raw.linesLocked===true)?SpreadScoring.line(g.team2Spread):null };
   }).filter(g=>g.team1 && g.team2);
   if(!games.length) throw new Error("week "+weekNum+" has no valid game rows");
   const tb = {}; SHEET.players.forEach(p=>{ const v=parseFloat((raw.tiebreaker||{})[p]); tb[p]=isNaN(v)?null:v; });
   const tbgRaw = raw.tiebreakerGame || games[games.length-1];   // convention: tiebreaker game = LAST game
   return {
     week: weekNum, season: SHEET.season, players: SHEET.players.slice(),
-    games,
+    mode:SpreadScoring.mode(raw.mode), linesLocked:raw.linesLocked===true, games,
     tiebreakerGame: { team1:up(tbgRaw.team1), team2:up(tbgRaw.team2) },
     tiebreaker: tb,
     _source: "google-sheet",
@@ -457,8 +459,8 @@ async function fetchCurrentNflWeek(){
 // Convert a parsed week tab into an ARCHIVE-shaped entry (picks only; winners/scores come from
 // ESPN later). Shape matches season.js: { week, games:[{team1,team2,picks}], tiebreaker }.
 function weekTabToArchive(wk){
-  return { week: wk.week, _source:"google-sheet",
-    games: wk.games.map(g=>({ team1:g.team1, team2:g.team2, picks:g.picks })),
+  return { week: wk.week, _source:"google-sheet", mode:wk.mode||'straight',linesLocked:!!wk.linesLocked,
+    games: wk.games.map(g=>({ team1:g.team1, team2:g.team2, picks:g.picks, team2Spread:g.team2Spread })),
     tiebreaker: wk.tiebreaker || {} };
 }
 
@@ -476,11 +478,14 @@ async function enrichArchiveWithEspn(entry){
     entry.games.forEach(g=>{
       const info = idx[mkey(g.team1, g.team2)];
       if(info){
-        if(info.completed && info.winner) g.winner = info.winner.toUpperCase();
+        const result=SpreadScoring.grade(g,info,entry.mode);
+        if(info.completed && result.winner) g.winner = result.winner;
         // a completed game with no winner is a settled TIE: mark it decided (no winner) so archived
         // weeks count it toward "final" and render it as TIE, exactly like the live view.
-        else if(info.completed && !info.winner){ g.decided = true; g.tie = true; }
-        if(info.scores) g.scores = info.scores;
+        else if(info.completed && result.push){ g.decided = true; g.tie = true; }
+        if(result.missingLine) g.missingLine=true;
+        if(SpreadScoring.mode(entry.mode)==='spread') g.espnInfo=info;
+        if(info.completed && info.scores) g.scores = info.scores;
       }
     });
     // tiebreaker actual = the LAST game's total once final (matches the site's tiebreaker convention)
@@ -515,6 +520,11 @@ function teamChip(abbr, cls){
     + `<img class="logo" src="${logoUrl(A)}" alt="${A}" `
     + `onerror="this.style.display='none';this.nextElementSibling.style.display='inline';">`
     + `<span class="logo-fb ${cls||''}" style="display:none">${A}</span></span>`;
+}
+
+function contestTeamChip(team, game, mode, cls){
+  const signed=SpreadScoring.mode(mode)==='spread'?SpreadScoring.signedFor(game,team):'';
+  return teamChip(team,cls)+(signed?` <span class="team-spread">${signed}</span>`:'');
 }
 
 // ---- Central Time formatting (convert the feed's UTC kickoff to America/Chicago) ----
@@ -662,12 +672,18 @@ function indexGames(data){
     // ESPN's brief completed:true + both winner:false) yields winner===null; such a game is DECIDED
     // (counts toward "final"/week-complete) but awards nobody a point.
     const decided = !!st.completed;
+    const pointSpread = c.odds?.[0]?.pointSpread;
+    const homeLine = SpreadScoring.line(pointSpread?.home?.close?.line);
+    const awayLine = SpreadScoring.line(pointSpread?.away?.close?.line);
+    const marketSpread = homeLine!==null && awayLine!==null && homeLine===-awayLine
+      ? {[A]:t1.homeAway==='home'?homeLine:awayLine,[B]:t2.homeAway==='home'?homeLine:awayLine}
+      : null;
     m[mkey(a1,a2)] = {
       state, completed: !!st.completed, decided, detail: st.shortDetail||"",
       date: ev.date || (c && c.date) || null,
       winner, total: s1+s2,
       scores: { [A]: s1, [B]: s2 },
-      winProb, probSource,
+      winProb, probSource, marketSpread, period:c.status?.period, clock:c.status?.clock,
       homeAbbr, neutral
     };
   });
@@ -730,23 +746,24 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
   // Pool percentages require coverage of every undecided game. Partial coverage
   // must not silently turn an unknown live game into a 50/50 forecast.
   const hasProbSource = undecided.length>0 && undecided.every(o=>
-    o.info && (o.info.probSource==="espn-live" || o.info.probSource==="odds-spread"));
+    o.info && ["espn-live","odds-spread","cover-model"].includes(o.info.probSource));
 
   const winShare = {}; players.forEach(p=>winShare[p]=0);
   // conditional win-share: for each undecided game i and player p, credit summed over scenarios
   // where side A won (condA) vs side B won (condB). Lets us measure how much each game swings
   // each rooting player's title chance -> the 🔥/⚠️/· intensity tags. probMassA[i] = P(side A wins).
-  let sides = [];
   const condA = [], condB = [], probMassA = [];
   let enumerated = false;
-  if(k>0 && k<=18){
+  const sides = undecided.map(({g,info})=>{
+    const A=g.team1.toUpperCase(), B=g.team2.toUpperCase();
+    const pA=info?.winProb?.[A]??0.5, pB=info?.winProb?.[B]??(1-pA);
+    const outcomes=[{winner:A,prob:pA},{winner:B,prob:pB}];
+    if(info?.pushProb>0 || info?.pushPossible) outcomes.push({winner:null,prob:info.pushProb||0});
+    return {A,B,pB,outcomes};
+  });
+  const total = sides.reduce((n,s)=>n*s.outcomes.length,1);
+  if(k>0 && total<=262144){
     enumerated = true;
-    // precompute per-undecided-game: [teamAbbrWinner, probThatWinner] for each of 2 sides
-    sides = undecided.map(o=>{
-      const A=o.g.team1.toUpperCase(), B=o.g.team2.toUpperCase();
-      const wp = (o.info && o.info.winProb) ? o.info.winProb : {[A]:0.5,[B]:0.5};
-      return { A, B, pA: (wp[A]!=null?wp[A]:0.5) };
-    });
     for(let i=0;i<k;i++){ condA[i]={}; condB[i]={}; probMassA[i]=0; players.forEach(p=>{condA[i][p]=0;condB[i][p]=0;}); }
     // exact needed-games tracking (count scenarios, prob-independent, so ties/needs are certain):
     //   winCnt[p]                = # of outcome-combos where p wins the week
@@ -756,19 +773,20 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     const winCnt = {}; players.forEach(p=>winCnt[p]=0);
     const winPickHit = [], winPickMiss = [];
     for(let i=0;i<k;i++){ winPickHit[i]={}; winPickMiss[i]={}; players.forEach(p=>{winPickHit[i][p]=0;winPickMiss[i][p]=0;}); }
-    const total = 1<<k;
     for(let mask=0; mask<total; mask++){
       let prob = 1;
       const wins = {}; players.forEach(p=>wins[p]=correct[p]);
-      const aWon = [];
+      const gameWinners = [];
+      let scenario = mask;
       // track, per player, whether each of their picked undecided games hit this scenario
       const pickHit = players.map(()=>[]); // index by player order
       for(let i=0;i<k;i++){
-        const winnerIsA = !!(mask & (1<<i));
-        aWon[i] = winnerIsA;
         const s = sides[i];
-        prob *= winnerIsA ? s.pA : (1-s.pA);
-        const w = winnerIsA ? s.A : s.B;
+        const outcome = s.outcomes[scenario%s.outcomes.length];
+        scenario = Math.floor(scenario/s.outcomes.length);
+        const w = outcome.winner;
+        gameWinners[i] = w;
+        prob *= outcome.prob;
         players.forEach((p,pi)=>{
           const pk=(undecided[i].g.picks[p]||"").toUpperCase();
           if(pk===s.A||pk===s.B){ const hit = (pk===w); if(hit) wins[p]++; pickHit[pi][i]=hit?1:0; }
@@ -793,8 +811,10 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
       });
       // accumulate per-game conditional credit + side-A probability mass
       for(let i=0;i<k;i++){
-        if(aWon[i]) probMassA[i] += prob;
-        const bucket = aWon[i] ? condA[i] : condB[i];
+        if(!gameWinners[i]) continue;
+        const aWon = gameWinners[i]===sides[i].A;
+        if(aWon) probMassA[i] += prob;
+        const bucket = aWon ? condA[i] : condB[i];
         players.forEach(p=>{ if(credit[p]) bucket[p] += credit[p]; });
       }
     }
@@ -854,7 +874,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
         const hitWins  = WHIT[i] ? (WHIT[i][p]||0) : 0;     // winning combos where this pick WON
         const required = (WC[p]>0) && missWins===0 && hitWins>0;
         myGames.push({ i, need:pk, other:(pk===A?B:A), required,
-          info:o.info, matchup:`${A}/${B}` });
+          info:o.info, game:o.g, matchup:`${A}/${B}` });
       }
     }
     const required = myGames.filter(x=>x.required);
@@ -874,7 +894,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
         const pickedA = pk===A;
         const hasPick = pk===A || pk===B;
         // conditional win-share of P if side A wins vs side B wins (normalize by branch mass)
-        const massA = probMassA[i], massB = 1-massA;
+        const massA = probMassA[i], massB = sides[i].pB;
         const shareA = (condA[i][p]||0), shareB = (condB[i][p]||0);
         const pA = massA>1e-9 ? shareA/massA : 0;      // P's win-chance if A wins this game
         const pB = massB>1e-9 ? shareB/massB : 0;      // P's win-chance if B wins this game
@@ -896,7 +916,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
         matters.push({
           i, A, B, need: hasPick ? pk : (rootA?A:B), other: hasPick ? (pickedA?B:A) : (rootA?B:A),
           hasPick, required: required.some(x=>x.i===i), swing, score, isTb, split, minoritySide,
-          info:o.info
+          info:o.info, game:o.g
         });
       }
     }
@@ -960,8 +980,8 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     const shareIfWin  = pickedA ? condA[i][p] : condB[i][p];   // credit when P's side won
     const shareIfLose = pickedA ? condB[i][p] : condA[i][p];   // credit when P's side lost
     // normalize to conditional probabilities (divide by the prob mass of each branch)
-    const massWin  = pickedA ? probMassA[i] : (1-probMassA[i]);
-    const massLose = pickedA ? (1-probMassA[i]) : probMassA[i];
+    const massWin  = pickedA ? probMassA[i] : sides[i].pB;
+    const massLose = pickedA ? sides[i].pB : probMassA[i];
     const pWin  = massWin>1e-9 ? shareIfWin/massWin : 0;
     const pLose = massLose>1e-9 ? shareIfLose/massLose : 0;
     const swing = pWin - pLose;                                 // how much winning this game helps P
@@ -994,7 +1014,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
     const bigCount  = rootA.concat(rootB).filter(r=>r.tag==="big").length;
     // decisiveness score: split contenders matter most, then must-win + big intensity.
     const decisiveness = (split?1000:0) + minority*100 + mustCount*10 + bigCount;
-    return { A, B, rootA, rootB, aliveA, aliveB, split, minority, mustCount, bigCount, decisiveness, info:o.info };
+    return { A, B, rootA, rootB, aliveA, aliveB, split, minority, mustCount, bigCount, decisiveness, info:o.info, game:o.g };
   }).sort((x,y)=> y.decisiveness - x.decisiveness);
 
   // KEY SWING (kept for compatibility): the split games, most-contested first.
@@ -1002,7 +1022,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
 
   // week state
   let state = "mid";
-  if(finals.length===0 && undecided.length>0) state = "notstarted";
+  if(finals.length===0 && undecided.length>0 && !undecided.some(o=>o.info?.state==='in')) state = "notstarted";
   else if(undecided.length===0) state = "final";
 
   return {
@@ -1015,7 +1035,7 @@ function computePathToWin(gamesOut, players, tbPreds, tbActual){
 // Build the human "needs" line for a player given the computed context.
 // SPECIFIC needed-games narrative (the main content). Returns HTML with team chips.
 // Formats like: "NEEDS: SEA (beat NE) + KC (beat DEN)" / "Clinches if EITHER of DAL, SEA hits".
-function pathNeedsText(r, ctx){
+function pathNeedsText(r, ctx, spreadWeek=false){
   if(ctx.state==="final"){
     return `${r.correct} correct`;
   }
@@ -1023,7 +1043,7 @@ function pathNeedsText(r, ctx){
   if(r.eliminated) return `<b class="pn-elim">ELIMINATED</b> — ${r.correct} correct, can't catch the leader even winning out`;
 
   // needed-game chip: "TEAM (beat OTHER)"
-  const chip = x => `<span class="pn-need-g">${teamChip(x.need)} <b>${x.need}</b> <span class="muted">(beat ${x.other})</span></span>`;
+  const chip = x => `<span class="pn-need-g">${teamChip(x.need)} <b>${x.need}${spreadWeek?' '+SpreadScoring.signedFor(x.game,x.need):''}</b> <span class="muted">(${spreadWeek?'cover vs':'beat'} ${x.other})</span></span>`;
   const req = r.neededAll || [];
   const help = r.neededHelpful || [];
   const head = `<b>${r.correct} correct.</b> `;
@@ -1101,7 +1121,10 @@ function homeAwayChipHtml(playerName, gamesOut){
 // week's PICKS.* (correct for the live view). Fixes B1: an archived week was always reading the live
 // week's tiebreaker game/preds, so its tie could never resolve or be labelled as a tiebreaker win.
 function renderPathToWin(gamesOut, opts){
-  if(window.ProbabilityHistory) window.ProbabilityHistory.update(PICKS.season,selectedWeek);
+  const spreadWeek=SpreadScoring.mode(opts?opts.mode:PICKS.mode)==='spread';
+  const historyPanel=document.getElementById('win-history-panel');
+  if(historyPanel)historyPanel.closest('.card').hidden=spreadWeek;
+  if(!spreadWeek && window.ProbabilityHistory) window.ProbabilityHistory.update(PICKS.season,selectedWeek);
   const el = document.getElementById("pathtowin"); if(!el) return;
   const players = (opts && opts.players) || PICKS.players;
   const tbPreds = (opts && opts.tbPreds) || PICKS.tiebreaker || {};
@@ -1131,6 +1154,14 @@ function renderPathToWin(gamesOut, opts){
     return;
   }
 
+  if(spreadWeek){
+    if(gamesOut.some(({g,info})=>SpreadScoring.line(g.team2Spread)===null || info?.missingLine)){
+      el.innerHTML='<div class="ptw-banner">Path to Win is waiting for the locked spreads for this week.</div>';
+      return;
+    }
+    gamesOut=gamesOut.map(({g,info})=>({g,info:{...info,winProb:null,probSource:null,
+      pushPossible:Number.isInteger(g.team2Spread),...SpreadScoring.coverForecast(g,info)}}));
+  }
   const ctx = computePathToWin(gamesOut, players, tbPreds, tbActual);
 
   // ===== ALL FINAL: winner + how decided =====
@@ -1167,7 +1198,11 @@ function renderPathToWin(gamesOut, opts){
   }
 
   // ===== NOT-STARTED or MID: game-first rooting view =====
-  const est = ctx.enumerated && ctx.hasProbSource
+  const est = spreadWeek && !ctx.enumerated
+    ? 'There are too many cover and push combinations to calculate a percentage yet.'
+    : spreadWeek && ctx.hasProbSource
+    ? 'Win % uses estimated chances of covering the locked lines. A push awards no points.'
+    : ctx.enumerated && ctx.hasProbSource
     ? `Intensity 🔥/⚠️/· from available game probabilities (rough <b>ESTIMATE</b>).`
     : `Win percentages unavailable: one or more remaining games lack a valid probability source. Required games, rooting splits and elimination scenarios still update.`;
   const banner = ctx.state==="notstarted"
@@ -1228,7 +1263,7 @@ function renderPathToWin(gamesOut, opts){
       const swingTxt = (m.swing>0.001 && ctx.hasProbSource) ? ` <span class="mm-sw">±${Math.round(m.swing*100)}%</span>` : "";
       return `<div class="mm-row" title="${why}">
         <span class="mm-ic">${icon}</span>
-        <span class="mm-g">${teamChip(m.need)} <b>${m.need}</b> <span class="muted" style="font-weight:400">over ${m.other}</span></span>
+        <span class="mm-g">${teamChip(m.need)} <b>${m.need}${spreadWeek?' '+SpreadScoring.signedFor(m.game,m.need):''}</b> <span class="muted" style="font-weight:400">${spreadWeek?'to cover vs':'over'} ${m.other}</span></span>
         <span class="mm-tag ${tagCls}">${tag}</span>${swingTxt}
       </div>`;
     };
@@ -1255,7 +1290,7 @@ function renderPathToWin(gamesOut, opts){
       <span>${avatar(r.name)}</span>
       <span class="ptw-mid">
         <span class="ptw-name">${r.name}${homeAwayChipHtml(r.name, gamesOut)}</span>
-        <span class="ptw-need">${pathNeedsText(r, ctx)}</span>
+        <span class="ptw-need">${pathNeedsText(r, ctx, spreadWeek)}</span>
         ${mattersMini(r, isEarly)}
       </span>
       ${like}
@@ -1267,6 +1302,7 @@ function renderPathToWin(gamesOut, opts){
   const gameCards = gv.map(s=>{
     const wp = s.info && s.info.winProb ? s.info.winProb : null;
     const pa = (wp && ctx.hasProbSource) ? Math.round((wp[s.A]!=null?wp[s.A]:0.5)*100) : null;
+    const pb = pa===null ? null : (spreadWeek?Math.round(wp[s.B]*100):100-pa);
     const live = s.info && s.info.state==="in";
     const kick = (s.info && s.info.state==="pre") ? fmtCT(s.info.date) : (live?"LIVE":"");
     const decideTag = s.split
@@ -1276,7 +1312,7 @@ function renderPathToWin(gamesOut, opts){
       const chips = rooters.length ? rooters.map(rooterChip).join(" ") : `<span class="muted" style="font-size:12px">nobody</span>`;
       const pTxt = (prob!=null) ? `<span class="rside-p">~${prob}%</span>` : "";
       return `<div class="rside">
-        <div class="rside-h">${teamChip(abbr)} <span class="rside-team">${abbr}</span> ${pTxt}</div>
+        <div class="rside-h">${teamChip(abbr)} <span class="rside-team">${abbr}${spreadWeek?' '+SpreadScoring.signedFor(s.game,abbr):''}</span> ${pTxt}</div>
         <div class="rside-rooters">${chips}</div>
       </div>`;
     };
@@ -1288,15 +1324,17 @@ function renderPathToWin(gamesOut, opts){
       <div class="ptwg-sides">
         ${sideBlock(s.A, s.rootA, pa)}
         <div class="rvs">vs</div>
-        ${sideBlock(s.B, s.rootB, pa!=null?100-pa:null)}
+        ${sideBlock(s.B, s.rootB, pb)}
       </div>
+      ${spreadWeek && pa!==null && s.info.pushProb>0 ? `<div class="note">~${Math.round(100*s.info.pushProb)}% push</div>` : ''}
     </div>`;
   }).join("");
 
   // Only show the win-% explainer when a % will actually render (an odds source is wired). With no
   // odds source today the % never shows, so the long "how it's calculated / ESTIMATE" block would be
   // promising a number that isn't there — gate it on hasProbSource (B3). Returns the day odds exist.
-  const pctExplainHtml = ctx.hasProbSource ? pctExplain : "";
+  const coverExplain = '<details class="pct-explain"><summary>How the spread win % is calculated</summary><div class="body">Before kickoff, the current ESPN spread sets the expected margin. If unavailable, the model centers on the locked line. During play, the score, remaining time and locked line update the estimate. Each game can have two cover outcomes and, at whole-point lines, a push. The same pool calculation weights those outcomes, adds the points to each player’s score, and shares tied outcomes until the tiebreaker is known. Games that matter are ranked by how much either side covering changes your chance.</div></details>';
+  const pctExplainHtml = ctx.hasProbSource && ctx.enumerated ? (spreadWeek?coverExplain:pctExplain) : "";
 
   el.innerHTML = banner
     + pctExplainHtml
@@ -1356,7 +1394,7 @@ function renderWeekBar(){
   if(lbl){
     lbl.innerHTML = selectedWeek===LIVE_WEEK
       ? `Showing <b>Week ${selectedWeek}</b> (current — live scores)`
-      : `Showing <b>Week ${selectedWeek}</b> (final results) · <span class="muted">tap ${LIVE_WEEK} for the live week</span>`;
+      : `Showing <b>Week ${selectedWeek}</b> (${selectedWeek>LIVE_WEEK?'upcoming':'past'} week) · <span class="muted">tap ${LIVE_WEEK} for the live week</span>`;
   }
 }
 
@@ -1383,11 +1421,11 @@ async function selectWeek(n){
     const rf = document.getElementById("refresh");
     renderArchivedWeek(ARCHIVE[n]);          // instant first paint (may show pre-enrichment state)
     if(archiveNeedsEnrich(ARCHIVE[n])){
-      if(rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — loading final results…`;
+      if(rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — loading scores…`;
       await enrichArchiveWithEspn(ARCHIVE[n]);
       if(selectedWeek===n) renderArchivedWeek(ARCHIVE[n]);   // re-render with real winners (unless user moved on)
     }
-    if(selectedWeek===n && rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — final results (archived)`;
+    if(selectedWeek===n && rf) rf.innerHTML = `<span class="dot idle"></span>Week ${n} — ${n>LIVE_WEEK?'upcoming':'past'} picks`;
   }
   window.scrollTo({top:0,behavior:"smooth"});
 }
@@ -1415,10 +1453,10 @@ function renderArchivedWeek(wk){
     // a game is DECIDED for an archived week if it has a winner OR was marked a settled tie
     // (g.decided, set by enrichArchiveWithEspn). Both complete the week; only a winner scores.
     const completed = !!(win || g.decided);
-    return { g:{team1:g.team1, team2:g.team2, picks:g.picks||{}},
-             info:{ state:"post", completed, winner:win, detail:"",
+    return { g:{team1:g.team1, team2:g.team2, picks:g.picks||{},team2Spread:g.team2Spread},
+             info:{ ...g.espnInfo, state:g.espnInfo?.state||(completed?"post":"pre"), completed, winner:win, detail:"",missingLine:!!g.missingLine,push:!!g.tie,
                     total:(wk.tbActual!=null?wk.tbActual:null),
-                    scores:{ [A]:(s[A]!=null?s[A]:null), [B]:(s[B]!=null?s[B]:null) } } };
+                    scores:g.espnInfo?.state==='in'?g.espnInfo.scores:{ [A]:(s[A]!=null?s[A]:null), [B]:(s[B]!=null?s[B]:null) } } };
   });
 
   // grade
@@ -1463,6 +1501,8 @@ function renderArchivedWeek(wk){
   // tiebreaker data so its tie resolves to the right player and the tiebreaker callout can fire (B1).
   renderPathToWin(gamesOut, {
     players,
+    mode:wk.mode,
+    linesLocked:wk.linesLocked,
     tbPreds: tbPreds,
     tbActual: (wk.tbActual!=null ? wk.tbActual : null),
     tiebreakerGame: (wk.games && wk.games.length) ? wk.games[wk.games.length-1] : null,
@@ -1475,22 +1515,23 @@ function renderArchivedWeek(wk){
     const win = info.winner?info.winner.toUpperCase():null;
     // decided-no-winner archived game = a settled TIE: no team styled won/lost, no pick scored.
     const tie = (info.completed && !win);
-    const teamSpan=(t)=>{ const cls = win ? (t===win?"won":"lost") : ""; return `<span class="${cls}">${teamChip(t, cls)}</span>`; };
+    const line=SpreadScoring.mode(wk.mode)==='spread'&&g.team2Spread==null?` · ${SpreadScoring.label(g)}`:'';
+    const teamSpan=(t)=>{ const cls = win ? (t===win?"won":"lost") : ""; return `<span class="${cls}">${contestTeamChip(t,g,wk.mode,cls)}</span>`; };
     const hasScores = info.scores && (info.scores[A]!=null || info.scores[B]!=null);
     const sc = hasScores ? `<span class="score">${A} ${info.scores[A]!=null?info.scores[A]:'–'} – ${B} ${info.scores[B]!=null?info.scores[B]:'–'}</span>` : "";
     const pks = players.map(p=>{ const pick=(g.picks[p]||"").toUpperCase();
       let c=""; if(win) c=(pick===win)?" correct":" wrong";   // tie -> neither correct nor wrong
-      const pk = pick ? teamChip(pick) : '<span class="pick">—</span>';
+      const pk = pick ? contestTeamChip(pick,g,wk.mode) : '<span class="pick">—</span>';
       return `<span class="pk${c}"><span class="who">${p}:</span> ${pk}</span>`; }).join("");
     return `<div class="game"><div class="ghead">
-        <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}</span>
-        <span class="gstatus s-post">${tie?"TIE":"FINAL"}</span></div>
+        <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}${line}</span>
+        <span class="gstatus ${info.completed?'s-post':'s-pre'}">${info.missingLine?'LINE MISSING':!info.completed?'UPCOMING':tie?(wk.mode==='spread'?'PUSH':'TIE'):"FINAL"}</span></div>
       ${sc?`<div style="margin-bottom:8px">${sc}</div>`:""}
       ${pickDistribution(g,players)}<div class="picks">${pks}</div></div>`;
   }).join("");
 
   document.getElementById("subhead").textContent =
-    `Week ${wk.week} · ${PICKS.season} · ${players.length} players · final`;
+    `Week ${wk.week} · ${PICKS.season} · ${players.length} players · ${wk.mode==='spread'?'against the spread':'straight up'} · ${wk.week>LIVE_WEEK?'upcoming':'past'}`;
 }
 
 function render(data){
@@ -1501,7 +1542,9 @@ function render(data){
   const gamesOut = [];
 
   PICKS.games.forEach(g=>{
-    const info = gmap[mkey(g.team1, g.team2)] || {state:"pre", completed:false, winner:null, detail:"", scores:{}};
+    const original = gmap[mkey(g.team1, g.team2)] || {state:"pre", completed:false, winner:null, detail:"", scores:{}};
+    const result=SpreadScoring.grade(g,original,PICKS.mode);
+    const info={...original,winner:result.winner,push:result.push,missingLine:result.missingLine};
     PICKS.players.forEach(p=>{
       const pick = (g.picks[p]||"").toUpperCase();
       if(info.completed && info.winner){
@@ -1576,25 +1619,26 @@ function render(data){
     const win = info.winner?info.winner.toUpperCase():null;
     const teamSpan=(t)=>{
       const cls = win ? (t===win?"won":"lost") : "";
-      return `<span class="${cls}">${teamChip(t, cls)}</span>`;
+      return `<span class="${cls}">${contestTeamChip(t,g,PICKS.mode,cls)}</span>`;
     };
     // decided-no-winner live game = settled TIE: show "TIE", score nobody as correct/wrong.
     const tie = (info.completed && !win);
+    const line=SpreadScoring.mode(PICKS.mode)==='spread'&&g.team2Spread==null?` · ${SpreadScoring.label(g)}`:'';
     const stCls = info.state==="post"?"s-post":(info.state==="in"?"s-in":"s-pre");
     const kickCT = fmtCT(info.date);
-    const stTxt = tie?"TIE":(info.state==="post"?"FINAL":(info.state==="in"?"LIVE":(kickCT||"—")));
+    const stTxt = info.missingLine?'LINE MISSING':tie?(PICKS.mode==='spread'?'PUSH':'TIE'):(info.state==="post"?"FINAL":(info.state==="in"?"LIVE":(kickCT||"—")));
     const sc = (info.scores&&Object.keys(info.scores).length)
       ? `<span class="score">${A} ${info.scores[A]||0} – ${B} ${info.scores[B]||0}</span>` : "";
     const pks = PICKS.players.map(p=>{
       const pick=(g.picks[p]||"").toUpperCase();
       let c="";
       if(win) c = (pick===win)?" correct":" wrong";   // tie -> neither correct nor wrong
-      const pk = pick ? teamChip(pick) : '<span class="pick">—</span>';
+      const pk = pick ? contestTeamChip(pick,g,PICKS.mode) : '<span class="pick">—</span>';
       return `<span class="pk${c}"><span class="who">${p}:</span> ${pk}</span>`;
     }).join("");
     return `<div class="game">
       <div class="ghead">
-        <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}</span>
+        <span class="matchup">${teamSpan(A)} <span class="lost">vs</span> ${teamSpan(B)}${line}</span>
         <span class="gstatus ${stCls}">${stTxt}</span>
       </div>
       ${sc?`<div style="margin-bottom:8px">${sc} <span class="score" style="color:var(--mut)">${info.detail||""}</span></div>`:""}
@@ -1603,7 +1647,7 @@ function render(data){
   }).join("");
 
   document.getElementById("subhead").textContent =
-    `Week ${PICKS.week} · ${PICKS.season} · ${PICKS.players.length} players`;
+    `Week ${PICKS.week} · ${PICKS.season} · ${PICKS.players.length} players · ${PICKS.mode==='spread'?'against the spread':'straight up'}`;
 }
 
 function updatedCT(){

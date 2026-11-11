@@ -83,6 +83,10 @@ async function main(){
     if(number!==week&&!existing) continue;
     const raw=feed.weeks?.[number];
     if(!raw?.games?.length) continue;
+    if(String(raw.mode||'straight').toLowerCase()==='spread'){
+      console.log(`Week ${number}: spread scoring; straight-up probability history is not applicable`);
+      continue;
+    }
     const players=feed.players;
     if(!Array.isArray(players)||!players.length||players.length>12||players.some(player=>typeof player!=='string')) throw new Error('Invalid public roster');
     const games=raw.games.map(game=>({team1:String(game.team1).trim().toUpperCase(),team2:String(game.team2).trim().toUpperCase(),picks:Object.fromEntries(players.map(player=>[player,String(game.picks?.[player]||'').trim().toUpperCase()]))}));

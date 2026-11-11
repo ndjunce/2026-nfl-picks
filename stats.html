@@ -193,6 +193,7 @@
 
 <script src="picks.js"></script>
 <script src="season.js"></script>
+<script src="spread-scoring.js"></script>
 <script>
 const ESPN = "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 const PLAYERS = (window.SEASON && SEASON.players) || (window.PICKS && PICKS.players) || ["Nick","Clyde","Chet","Henry","Riley","Bobby"];
@@ -264,12 +265,13 @@ function normalizeWeek(raw, weekNum){
   const up = s => String(s==null?"":s).trim().toUpperCase();
   const games = raw.games.map(g=>{
     const picks={}; SHEET.players.forEach(p=>{ picks[p] = up((g.picks||{})[p]); });
-    return { team1:up(g.team1), team2:up(g.team2), picks };
+    return { team1:up(g.team1), team2:up(g.team2), picks,
+      team2Spread:(g.lineLocked===true||raw.linesLocked===true)?SpreadScoring.line(g.team2Spread):null };
   }).filter(g=>g.team1 && g.team2);
   if(!games.length) throw new Error("week "+weekNum+" has no valid game rows");
   const tb = {}; SHEET.players.forEach(p=>{ const v=parseFloat((raw.tiebreaker||{})[p]); tb[p]=isNaN(v)?null:v; });
   const tbgRaw = raw.tiebreakerGame || games[games.length-1];
-  return { week: weekNum, season: SHEET.season, players: SHEET.players.slice(), games,
+  return { week: weekNum, season: SHEET.season, players: SHEET.players.slice(), mode:SpreadScoring.mode(raw.mode), games,
     tiebreakerGame: { team1:up(tbgRaw.team1), team2:up(tbgRaw.team2) }, tiebreaker: tb, _source:"google-sheet" };
 }
 
@@ -313,8 +315,8 @@ async function fetchCurrentNflWeek(){
 
 // Convert a parsed sheet week into an archive-shaped entry (COPIED from index.html).
 function weekTabToArchive(wk){
-  return { week: wk.week, _source:"google-sheet",
-    games: wk.games.map(g=>({ team1:g.team1, team2:g.team2, picks:g.picks })),
+  return { week: wk.week, _source:"google-sheet",mode:wk.mode||'straight',
+    games: wk.games.map(g=>({ team1:g.team1, team2:g.team2, picks:g.picks,team2Spread:g.team2Spread })),
     tiebreaker: wk.tiebreaker || {} };
 }
 
@@ -329,9 +331,11 @@ async function enrichArchiveWithEspn(entry){
     entry.games.forEach(g=>{
       const info = idx[mkey(g.team1, g.team2)];
       if(info){
-        if(info.completed && info.winner) g.winner = info.winner.toUpperCase();
+        const result=SpreadScoring.grade(g,info,entry.mode);
+        if(info.completed && result.winner) g.winner=result.winner;
         // completed with no winner = settled TIE: mark decided (no winner) so the week still completes.
-        else if(info.completed && !info.winner){ g.decided = true; g.tie = true; }
+        else if(info.completed && result.push){ g.decided=true;g.tie=true; }
+        if(result.missingLine)g.missingLine=true;
         if(info.scores) g.scores = info.scores;
         if(info.favAbbr) g.favAbbr = info.favAbbr;   // favorite (odds-sourced only) for fav/dog lean
         g.homeAbbr = info.homeAbbr;
@@ -362,7 +366,7 @@ function archiveToWeekResult(entry){
   // week completing even though it scores nobody, so a tie no longer leaves the week forever "in progress".
   const decidedGames=(entry.games||[]).filter(g=>g.winner||g.decided).length;
   const finalGames=decidedGames;                       // decided games = final (tie included)
-  return { week: entry.week, results, tiebreaker: entry.tiebreaker||{},
+  return { week: entry.week, mode:entry.mode||'straight', results, tiebreaker: entry.tiebreaker||{},
     tbActual: entry.tbActual!=null?entry.tbActual:null, games, _source:"google-sheet",
     totalGames, finalGames, complete: totalGames>0 && finalGames>=totalGames };
 }
@@ -381,22 +385,24 @@ async function gradePicksLive(P){
   let anyFinal=false, decidedGames=0;
   P.games.forEach(g=>{
     const info=idx[mkey(g.team1,g.team2)];
-    if(info&&info.completed) decidedGames++;            // DECIDED (winner OR settled tie) -> counts toward completeness
-    if(info&&info.completed&&info.winner){ anyFinal=true;
+    const result=SpreadScoring.grade(g,info,P.mode);
+    if(info&&info.completed&&!result.missingLine) decidedGames++;
+    if(info&&info.completed&&result.winner){ anyFinal=true;
       PLAYERS.forEach(p=>{ const pk=(g.picks[p]||"").toUpperCase(); if(!pk)return;
-        if(pk===info.winner.toUpperCase()) results[p].w++; else results[p].l++; });
+        if(pk===result.winner) results[p].w++; else results[p].l++; });
     }
   });
   let tbActual=null;
   if(P.tiebreakerGame){ const tbi=idx[mkey(P.tiebreakerGame.team1,P.tiebreakerGame.team2)];
     if(tbi&&tbi.completed) tbActual=tbi.total; }
   const games=P.games.map(g=>{ const info=idx[mkey(g.team1,g.team2)];
-    return (info&&info.completed&&info.winner)
-      ? { team1:g.team1, team2:g.team2, winner:info.winner.toUpperCase(), picks:g.picks,
+    const result=SpreadScoring.grade(g,info,P.mode);
+    return (info&&info.completed&&result.winner)
+      ? { team1:g.team1, team2:g.team2, winner:result.winner, picks:g.picks,
           favAbbr:info.favAbbr||null, homeAbbr:info.homeAbbr||null } : null; }).filter(Boolean);
   const totalGames=P.games.length;
   const finalGames=decidedGames;                       // decided games (winner OR settled tie) = final
-  return { week: P.week, results, tiebreaker: P.tiebreaker||{}, tbActual, games,
+  return { week: P.week, mode:P.mode||'straight', results, tiebreaker: P.tiebreaker||{}, tbActual, games,
            live:true, noneFinal: !anyFinal, _source: P._source || "committed",
            totalGames, finalGames, complete: totalGames>0 && finalGames>=totalGames };
 }
@@ -487,7 +493,7 @@ async function renderUnderdogs(weeks){
     return response.json();
   };
   const jobs = [];
-  await Promise.all(weeks.map(async week => {
+  await Promise.all(weeks.filter(week=>SpreadScoring.mode(week.mode)!=='spread').map(async week => {
     const games = (week.games||[]).filter(game => game.winner && PLAYERS.some(player => [game.team1,game.team2].includes(game.picks?.[player])));
     coverage.graded += games.length;
     try{
@@ -573,7 +579,7 @@ async function renderUnderdogs(weeks){
       : `<tr><td>${week.week}</td><td>No picked underdog win</td><td>—</td></tr>`;
   }).join('');
   document.getElementById('dogs-note').textContent = `ESPN / DraftKings closing spreads available for ${coverage.known}/${coverage.graded} graded games with picks. `+
-    'Only settled picks count; positive-spread teams are underdogs, pick’em games are excluded. Wins are straight up. Biggest / weekly dogs use largest spread; all ties shown. Missing lines are excluded'+(coverage.known<coverage.graded?' — records and awards are partial.':'.');
+    'Only straight-up weeks and settled picks count; spread-scored weeks and pick’em games are excluded. Wins are straight up. Biggest / weekly dogs use largest spread; all ties shown. Missing lines are excluded'+(coverage.known<coverage.graded?' — records and awards are partial.':'.');
   document.getElementById('dogs-note').textContent+=` Historical lines cached on this device for up to 7 days (${coverage.cached} reused); results and picks reload fresh. Coverage applies to both tables.`;
   window.UNDERDOG_STATS = {rows, totals, coverage, favoriteRows, favoriteTotals};
 }
