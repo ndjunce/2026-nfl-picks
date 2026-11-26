@@ -4,12 +4,12 @@
    ----------------------------------------------------------------------------
    WHAT THIS DOES
    - doGet()            : Web App endpoint. Reads every "Week N" tab and returns
-                          ALL weeks' picks as JSON for the picks website to fetch.
-   - buildWeekSchedule(N): Pulls Week N's NFL matchups from ESPN's public
+                          ALL weeks' picks as JSON. ?entry=1 serves the player form.
+   - buildWeekSchedule_(N): Pulls Week N's NFL matchups from ESPN's public
                           scoreboard and writes team1/team2 rows into a "Week N"
                           tab (creates the tab + header + TIEBREAKER row). So you
                           never hand-type games — just pick winners.
-   - addDropdowns(N)    : Sets a click-to-pick dropdown on each game's six player
+   - addDropdowns_(N)   : Sets a click-to-pick dropdown on each game's six player
                           cells (that game's two team abbreviations only).
    - "Picks Tools" menu : run the above per week from the Sheet toolbar.
 
@@ -19,10 +19,11 @@
      → Deploy → authorize → copy the /exec URL → hand it to the site (SHEET.jsonUrl).
 
    TAB LAYOUT (matches the website parser exactly):
-     Row 1 header:  team1 | team2 | Nick | Clyde | Chet | Henry | Riley | Bobby
+     Row 1 header:  team1 | team2 | Nick | Clyde | Chet | Henry | Riley | Bobby | team2_spread
      One row per game (team abbrevs the scoreboard uses: WSH, LAR, LAC, LV, ...).
-     Last content row: team1 = "TIEBREAKER", team2 blank, each player's cell = their
+     TIEBREAKER row: team1 = "TIEBREAKER", team2 blank, each player's cell = their
      numeric predicted total for the LAST game (that game is the tiebreaker game).
+     A PICK_MODE / SPREAD row enables spread grading and player entry on that weekly tab.
    ============================================================================ */
 
 var SEASON  = 2026;
@@ -30,11 +31,26 @@ var PLAYERS = ["Nick", "Clyde", "Chet", "Henry", "Riley", "Bobby"];
 var HEADER  = ["team1", "team2"].concat(PLAYERS).concat(["team2_spread"]);
 var TIEBREAKER_LABEL = "TIEBREAKER";
 var MODE_LABEL = "PICK_MODE";
+var PICKS_SPREADSHEET_ID = "1fr3FephcCutOiRaNB7yi78o9DCExXdYbV-CdC2gkqtw";
+var PLAYER_CODE_PREFIX = "PICK_ENTRY_CODE_";
 
 /* ---------- Web App: return every week's picks as JSON ---------- */
 function doGet(e) {
+  if (e && e.parameter && e.parameter.entry === "1") {
+    return HtmlService.createHtmlOutputFromFile("PickEntry")
+      .setTitle("Enter Your Picks | Phipps Tavern")
+      .addMetaTag("viewport", "width=device-width, initial-scale=1");
+  }
+  return withPickScriptLock_(publicPicksJson_);
+}
+
+function publicPicksJson_() {
   var out = { season: SEASON, players: PLAYERS, weeks: {} };
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var codes = PropertiesService.getScriptProperties();
+  if (PLAYERS.some(function (player) { return !!codes.getProperty(PLAYER_CODE_PREFIX + player); })) {
+    out.playerPickEntry = true;
+  }
+  var ss = openPicksSpreadsheet_();
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
     var name = sheets[i].getName();
@@ -51,6 +67,235 @@ function doGet(e) {
   return ContentService
     .createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function openPicksSpreadsheet_() {
+  return SpreadsheetApp.openById(PICKS_SPREADSHEET_ID);
+}
+
+/* ---------- Player entry (Google Apps Script HTML service) ---------- */
+function getPlayerPickCard(player, code, week) {
+  requirePlayerCode_(player, code);
+  var current = week === "" || week == null;
+  var scoreboard = fetchEntryScoreboard_(current ? null : requireWeekNumber_(week));
+  var ss = openPicksSpreadsheet_();
+  var firstWeek = scoreboard.week;
+  var firstCard = null;
+  for (var n = firstWeek; n <= (current ? 18 : firstWeek); n++) {
+    if (!ss.getSheetByName("Week " + n)) continue;
+    if (n !== firstWeek) {
+      var nextWeek = readPickEntryWeek_(ss, n, player);
+      if (!nextWeek) continue;
+      scoreboard = fetchEntryScoreboard_(n);
+    }
+    var card = withPickScriptLock_(function () {
+      requirePlayerCode_(player, code);
+      var source = readPickEntryWeek_(ss, n, player);
+      return source ? playerPickCard_(source, scoreboard.games, Date.now()) : null;
+    });
+    if (!card) continue;
+    if (!current || card.games.some(function (g) { return !g.closed; })) return card;
+    firstCard = firstCard || card;
+  }
+  if (firstCard) return firstCard;
+  throw new Error(current ? "No against-the-spread pick card is available." :
+    "Week " + firstWeek + " is not set up for against-the-spread entry.");
+}
+
+function savePlayerPickCard(player, code, week, changes, tiebreaker) {
+  requirePlayerCode_(player, code);
+  week = requireWeekNumber_(week);
+  if (!Array.isArray(changes) || changes.length > 16) throw new Error("Invalid game changes.");
+  if (tiebreaker != null && (!Number.isSafeInteger(tiebreaker) || tiebreaker < 0)) {
+    throw new Error("Enter a whole-number tiebreaker of zero or more.");
+  }
+  var scoreboard = fetchEntryScoreboard_(week).games;
+  return withPickScriptLock_(function () {
+    requirePlayerCode_(player, code);
+    var source = readPickEntryWeek_(openPicksSpreadsheet_(), week, player);
+    if (!source) throw new Error("This week is not set up for against-the-spread entry.");
+    var now = Date.now(), updates = [], seen = {}, newLines = false, deadlines = [];
+    var card = playerPickCard_(source, scoreboard, now);
+    changes.forEach(function (change) {
+      var key = change && matchupKey_(change.team1, change.team2);
+      var row = key && source.games[key];
+      if (!row || row.team1 !== change.team1 || row.team2 !== change.team2 ||
+          seen[key] || (change.pick !== row.team1 && change.pick !== row.team2)) {
+        throw new Error("Invalid pick. Reload your card and choose one team per game.");
+      }
+      seen[key] = true;
+      var game = card.games[row.index];
+      if (game.closed) throw new Error(row.team1 + " vs " + row.team2 + " is closed.");
+      if (game.team2Spread === null || change.team2Spread !== game.team2Spread) {
+        throw new Error("The spread for " + row.team1 + " vs " + row.team2 +
+          " changed or is unavailable. Reload your card before saving.");
+      }
+      if (row.pick === change.pick) return;
+      deadlines.push(Date.parse(game.kickoff));
+      if (!source.receipt.games[key]) {
+        var market = scoreboard[key];
+        var timestamp = new Date(now).toISOString();
+        source.receipt.games[key] = {team2: row.team2, line: game.team2Spread,
+          source: "ESPN / " + market.provider, eventId: market.eventId, lockedAt: timestamp};
+        source.receipt.lockedAt = source.receipt.lockedAt || timestamp;
+        updates.push(pickCellUpdate_(source, row.number, source.spreadColumn, game.team2Spread));
+        newLines = true;
+      }
+      updates.push(pickCellUpdate_(source, row.number, source.playerColumn, change.pick));
+      row.pick = change.pick;
+    });
+    if (tiebreaker != null && tiebreaker !== card.tiebreaker) {
+      if (card.tiebreakerClosed) throw new Error("Tiebreaker entry is closed.");
+      deadlines.push(Date.parse(card.games[card.games.length - 1].kickoff));
+      updates.push(pickCellUpdate_(source, source.tiebreakerRow, source.playerColumn, tiebreaker));
+      source.tiebreaker = tiebreaker;
+    }
+    if (deadlines.some(function (deadline) { return Date.now() >= deadline; })) {
+      throw new Error("A game kicked off before these changes could be saved. Reload your card.");
+    }
+    if (updates.length) commitPlayerPickChanges_(source, updates, newLines);
+    return playerPickCard_(source, scoreboard, Date.now());
+  });
+}
+
+function withPickScriptLock_(operation) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    return operation();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function playerCodeDigest_(player, code) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, player + ":" + code)
+    .map(function (byte) { return ("0" + (byte & 255).toString(16)).slice(-2); }).join("");
+}
+
+function requirePlayerCode_(player, code) {
+  var normalized = typeof code === "string" ? code.trim().toLowerCase() : "";
+  if (PLAYERS.indexOf(player) < 0 || !/^[0-9a-f]{32}$/.test(normalized) ||
+      PropertiesService.getScriptProperties().getProperty(PLAYER_CODE_PREFIX + player) !==
+        playerCodeDigest_(player, normalized)) {
+    throw new Error("Choose your player name and enter your access code.");
+  }
+}
+
+function requireWeekNumber_(value) {
+  if (typeof value !== "number" && typeof value !== "string") throw new Error("Choose a week from 1 to 18.");
+  var week = Number(value);
+  if (!Number.isInteger(week) || week < 1 || week > 18) throw new Error("Choose a week from 1 to 18.");
+  return week;
+}
+
+function matchupKey_(team1, team2) {
+  return [team1, team2].sort().join("|");
+}
+
+function signedLine_(raw) {
+  if (typeof raw !== "number" && (typeof raw !== "string" || !raw.trim())) return null;
+  var line = Number(raw);
+  return Number.isFinite(line) && Math.abs(line) <= 50 ? line : null;
+}
+
+function spreadReceiptKey_(week) {
+  return "SPREAD_LINES_" + SEASON + "_" + week;
+}
+
+function readPickEntryWeek_(ss, week, player) {
+  var sheet = ss.getSheetByName("Week " + week);
+  if (!sheet) return null;
+  var values = sheet.getDataRange().getValues();
+  var header = values[0].map(function (cell) { return String(cell).trim().toLowerCase(); });
+  var a = header.indexOf("team1"), b = header.indexOf("team2"), s = header.indexOf("team2_spread");
+  var p = header.indexOf(player.toLowerCase());
+  var columns = ["team1", "team2", "team2_spread"].concat(PLAYERS).map(function (name) {
+    return name.toLowerCase();
+  });
+  var up = function (cell) { return String(cell == null ? "" : cell).trim().toUpperCase(); };
+  var modeRow = a >= 0 && b >= 0 && values.slice(1).filter(function (row) {
+    return up(row[a]) === MODE_LABEL;
+  }).pop();
+  if (!modeRow || up(modeRow[b]) !== "SPREAD") return null;
+  if (columns.some(function (name) { return header.filter(function (cell) { return cell === name; }).length !== 1; })) {
+    throw new Error("The Week " + week + " sheet needs its game, player and spread columns checked.");
+  }
+  var order = [], games = {}, tiebreakerRow = null;
+  values.slice(1).forEach(function (row, index) {
+    var first = up(row[a]), second = up(row[b]), rowNumber = index + 2;
+    if (!first || first === MODE_LABEL) return;
+    if (first === TIEBREAKER_LABEL) {
+      if (tiebreakerRow !== null) throw new Error("The week has more than one tiebreaker row.");
+      tiebreakerRow = rowNumber;
+      return;
+    }
+    if (!second) return;
+    var key = matchupKey_(first, second);
+    if (games[key]) throw new Error("The week has a duplicate matchup.");
+    var rowHasPick = PLAYERS.some(function (name) {
+      var pick = up(row[header.indexOf(name.toLowerCase())]);
+      return pick === first || pick === second;
+    });
+    games[key] = {team1: first, team2: second, number: rowNumber, index: order.length,
+      pick: up(row[p]), hasPick: rowHasPick};
+    order.push(key);
+  });
+  if (!order.length) return null;
+  if (tiebreakerRow === null) throw new Error("The week is missing its tiebreaker row.");
+  var rawTotal = values[tiebreakerRow - 1][p];
+  var tiebreaker = rawTotal === "" || rawTotal == null ? null : Number(rawTotal);
+  var property = spreadReceiptKey_(week);
+  var priorReceipt = PropertiesService.getDocumentProperties().getProperty(property);
+  return {week: week, sheet: sheet, values: values, games: games, order: order, playerColumn: p + 1,
+    spreadColumn: s + 1, tiebreakerRow: tiebreakerRow, property: property, priorReceipt: priorReceipt,
+    tiebreaker: Number.isSafeInteger(tiebreaker) && tiebreaker >= 0 ? tiebreaker : null,
+    receipt: priorReceipt ? JSON.parse(priorReceipt) : {games: {}}};
+}
+
+function playerPickCard_(source, scoreboard, now) {
+  var games = source.order.map(function (key) {
+    var row = source.games[key], market = scoreboard[key], saved = source.receipt.games[key];
+    var closed = !market || !market.kickoff || market.started || now >= Date.parse(market.kickoff);
+    // Existing Sheet picks with no receipt need the owner's official line, not a later quote.
+    var line = saved ? (saved.team2 === row.team2 ? signedLine_(saved.line) : null) :
+      (!closed && !row.hasPick ? espnMarketLine_(market, row.team2) : null);
+    return {team1: row.team1, team2: row.team2, team2Spread: line,
+      kickoff: market ? market.kickoff : null, closed: closed, pick: row.pick};
+  });
+  return {week: source.week, games: games, tiebreaker: source.tiebreaker,
+    tiebreakerClosed: games[games.length - 1].closed};
+}
+
+function pickCellUpdate_(source, row, column, value) {
+  var range = source.sheet.getRange(row, column);
+  return {range: range, value: value, prior: range.getFormula() || source.values[row - 1][column - 1]};
+}
+
+function commitPlayerPickChanges_(source, updates, newLines) {
+  var properties = PropertiesService.getDocumentProperties();
+  var attempted = [];
+  try {
+    updates.forEach(function (update) {
+      attempted.push(update);
+      update.range.setValue(update.value);
+    });
+    SpreadsheetApp.flush();
+    if (newLines) properties.setProperty(source.property, JSON.stringify(source.receipt));
+  } catch (error) {
+    try {
+      attempted.forEach(function (update) { update.range.setValue(update.prior); });
+      SpreadsheetApp.flush();
+      if (newLines) {
+        if (source.priorReceipt) properties.setProperty(source.property, source.priorReceipt);
+        else properties.deleteProperty(source.property);
+      }
+    } catch (rollbackError) {
+      console.error("Failed to restore pick submission: " + rollbackError.message);
+    }
+    console.error("Failed to save pick submission: " + error.message);
+    throw new Error("The sheet could not save your changes. Reload your card before trying again.");
+  }
 }
 
 // Read one "Week N" sheet into { games:[{team1,team2,picks}], tiebreaker, tiebreakerGame }.
@@ -91,15 +336,16 @@ function readWeekSheet_(sheet) {
     games.push({ team1: up(t1), team2: up(t2), picks: picks,
       team2Spread: isFinite(team2Spread) ? team2Spread : null });
   }
-  var locked = PropertiesService.getDocumentProperties().getProperty("SPREAD_LINES_" + SEASON + "_" + sheet.getName().match(/\d+/)[0]);
+  var locked = PropertiesService.getDocumentProperties().getProperty(spreadReceiptKey_(sheet.getName().match(/\d+/)[0]));
   var receipt = locked ? JSON.parse(locked) : null;
   if (mode === "spread") {
     var saved = receipt ? receipt.games : {};
     games.forEach(function (g) {
       var key = [g.team1, g.team2].sort().join("|");
       var official = saved[key];
-      g.lineLocked = !!(official && official.team2 === g.team2 && isFinite(Number(official.line)));
-      g.team2Spread = g.lineLocked ? Number(official.line) : null;
+      var line = official && official.team2 === g.team2 ? signedLine_(official.line) : null;
+      g.lineLocked = line !== null;
+      g.team2Spread = line;
       g.lineSource = g.lineLocked ? (official.source || "sheet-manual") : null;
       g.lineLockedAt = g.lineLocked ? (official.lockedAt || receipt.lockedAt || null) : null;
     });
@@ -120,46 +366,49 @@ function readWeekSheet_(sheet) {
    So the schedule auto-fill is a NICE-TO-HAVE: we try several sources, but if ALL fail we still
    create the tab (header + TIEBREAKER row + dropdowns) so Nick can hand-enter the games.
    This function NEVER throws for a fetch failure — it degrades gracefully. -------------------------- */
-function buildWeekSchedule(week) {
+function buildWeekSchedule_(week) {
   week = Number(week);
   if (!week || week < 1 || week > 18) { safeToast_("Enter a week number 1-18."); return 0; }
 
   var games = fetchWeekGames_(week);            // [] if every source is blocked/unreachable
   var autoFilled = games.length > 0;
 
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
   var name = "Week " + week;
-  var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
-  sheet.clear();
+  return withPickScriptLock_(function () {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
+    sheet.clear();
 
-  // header
-  sheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]).setFontWeight("bold");
+    // header
+    sheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]).setFontWeight("bold");
 
-  // game rows (team1/team2 filled if we got them; else NONE — Nick types team1/team2 by hand)
-  var rows = games.map(function (g) {
-    return [g.team1, g.team2].concat(PLAYERS.map(function () { return ""; })).concat([""]);
+    // game rows (team1/team2 filled if we got them; else NONE — Nick types team1/team2 by hand)
+    var rows = games.map(function (g) {
+      return [g.team1, g.team2].concat(PLAYERS.map(function () { return ""; })).concat([""]);
+    });
+    if (!autoFilled) {
+      // Seed blank game rows for hand entry when no schedule is available.
+      for (var i = 0; i < 16; i++) rows.push(["", ""].concat(PLAYERS.map(function () { return ""; })).concat([""]));
+    }
+    // TIEBREAKER row (blank totals for each player to fill)
+    rows.push([TIEBREAKER_LABEL, ""].concat(PLAYERS.map(function () { return ""; })).concat([""]));
+    sheet.getRange(2, 1, rows.length, HEADER.length).setValues(rows);
+
+    sheet.setFrozenRows(1);
+    sheet.autoResizeColumns(1, HEADER.length);
+
+    // dropdowns only make sense once team1/team2 exist; safe to run either way (skips blank rows).
+    try { addDropdowns_(week); } catch (e) { /* never let dropdowns break tab creation */ }
+
+    if (autoFilled) {
+      safeToast_("Built " + name + " with " + games.length + " games + dropdowns.");
+    } else {
+      safeToast_("Built " + name + " (empty). Schedule sources were unreachable from Google — type each game's " +
+                 "team1/team2, then run Picks Tools → Add dropdowns.");
+    }
+    SpreadsheetApp.flush();
+    return games.length;
   });
-  if (!autoFilled) {
-    // seed a handful of blank game rows so there's an obvious place to type teams + a shape to fill
-    for (var i = 0; i < 16; i++) rows.push(["", ""].concat(PLAYERS.map(function () { return ""; })).concat([""]));
-  }
-  // TIEBREAKER row (blank totals for each player to fill)
-  rows.push([TIEBREAKER_LABEL, ""].concat(PLAYERS.map(function () { return ""; })).concat([""]));
-  sheet.getRange(2, 1, rows.length, HEADER.length).setValues(rows);
-
-  sheet.setFrozenRows(1);
-  sheet.autoResizeColumns(1, HEADER.length);
-
-  // dropdowns only make sense once team1/team2 exist; safe to run either way (skips blank rows).
-  try { addDropdowns(week); } catch (e) { /* never let dropdowns break tab creation */ }
-
-  if (autoFilled) {
-    safeToast_("Built " + name + " with " + games.length + " games + dropdowns.");
-  } else {
-    safeToast_("Built " + name + " (empty). Schedule sources were unreachable from Google — type each game's " +
-               "team1/team2, then run Picks Tools → Add dropdowns.");
-  }
-  return games.length;
 }
 
 /* ---------- Schedule fetch: try several sources; return [] on total failure (never throws) ----------
@@ -271,17 +520,17 @@ function safeToast_(msg) {
 }
 
 /* ---------- Per-game dropdowns (each game's two team abbrevs) ---------- */
-function addDropdowns(week) {
+function addDropdowns_(week) {
   week = Number(week);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("Week " + week);
-  if (!sheet) throw new Error("no 'Week " + week + "' tab — run buildWeekSchedule first");
+  if (!sheet) throw new Error("no 'Week " + week + "' tab — build the week's schedule first");
   var values = sheet.getDataRange().getValues();
   var firstPlayerCol = 3;                       // col C (1-based): team1=A, team2=B, players start C
   for (var r = 1; r < values.length; r++) {     // skip header row
     var t1 = String(values[r][0] == null ? "" : values[r][0]).trim();
     var t2 = String(values[r][1] == null ? "" : values[r][1]).trim();
-    if (!t1 || t1.toUpperCase() === TIEBREAKER_LABEL) continue;   // no dropdown on the tiebreaker row
+    if (!t1 || [TIEBREAKER_LABEL, MODE_LABEL].indexOf(t1.toUpperCase()) >= 0) continue;
     if (!t2) continue;
     var rule = SpreadsheetApp.newDataValidation()
       .requireValueInList([t1.toUpperCase(), t2.toUpperCase()], true)
@@ -298,15 +547,41 @@ function onOpen() {
     .createMenu("Picks Tools")
     .addItem("Build week schedule…", "menuBuildWeek_")
     .addItem("Add dropdowns to a week…", "menuAddDropdowns_")
-    .addItem("Enable ESPN spread auto-lock", "installSpreadLockTrigger")
+    .addItem("Enable ESPN spread auto-lock", "installSpreadLockTrigger_")
     .addItem("Lock official spreads for a week…", "menuLockSpreads_")
+    .addItem("Issue a player access code…", "menuIssuePlayerCode_")
     .addSeparator()
     .addItem("Show Web App JSON URL note", "menuShowUrlNote_")
     .addToUi();
 }
 
+function menuIssuePlayerCode_() {
+  var ui = SpreadsheetApp.getUi();
+  var owner = SpreadsheetApp.getActiveSpreadsheet().getOwner();
+  if (!owner || owner.getEmail() !== Session.getEffectiveUser().getEmail()) {
+    ui.alert("Only the sheet owner can issue player access codes.");
+    return;
+  }
+  var response = ui.prompt("Issue a player access code",
+    "Enter one player name: " + PLAYERS.join(", ") + ". A new code replaces their previous code.",
+    ui.ButtonSet.OK_CANCEL);
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var name = response.getResponseText().trim().toLowerCase();
+  var player = PLAYERS.filter(function (p) { return p.toLowerCase() === name; })[0];
+  if (!player) {
+    ui.alert("Choose a player from the roster.");
+    return;
+  }
+  var code = Utilities.getUuid().replace(/-/g, "").toLowerCase();
+  withPickScriptLock_(function () {
+    PropertiesService.getScriptProperties().setProperty(PLAYER_CODE_PREFIX + player, playerCodeDigest_(player, code));
+  });
+  ui.alert(player + "'s access code", code + "\n\nCopy this code and share it privately with " + player +
+    ". The sheet cannot show it again.", ui.ButtonSet.OK);
+}
+
 // Install once as the Sheet owner. A simple onEdit cannot use authorized UrlFetchApp.
-function installSpreadLockTrigger() {
+function installSpreadLockTrigger_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var exists = ScriptApp.getProjectTriggers().some(function (trigger) {
     return trigger.getHandlerFunction() === "captureEspnSpreadOnEdit_";
@@ -321,9 +596,7 @@ function captureEspnSpreadOnEdit_(event) {
   var match = /^Week\s+(\d+)$/i.exec(sheet.getName());
   if (!match || event.range.getRow() < 2) return;
   var week = Number(match[1]);
-  var guard = LockService.getDocumentLock();
-  guard.waitLock(30000);
-  try {
+  withPickScriptLock_(function () {
     var values = sheet.getDataRange().getValues();
     var header = values[0].map(function (v) { return String(v).trim().toLowerCase(); });
     var a = header.indexOf("team1"), b = header.indexOf("team2"), s = header.indexOf("team2_spread");
@@ -336,7 +609,7 @@ function captureEspnSpreadOnEdit_(event) {
         String(row[b]).trim().toUpperCase() === "SPREAD";
     });
     if (!spreadMode) return;
-    var key = "SPREAD_LINES_" + SEASON + "_" + week;
+    var key = spreadReceiptKey_(week);
     var props = PropertiesService.getDocumentProperties();
     var receipt = JSON.parse(props.getProperty(key) || '{"games":{}}');
     for (var rowNum = event.range.getRow(); rowNum <= event.range.getLastRow(); rowNum++) {
@@ -360,46 +633,72 @@ function captureEspnSpreadOnEdit_(event) {
       props.setProperty(key, JSON.stringify(receipt));
       sheet.getRange(rowNum, s + 1).setValue(line.line);
     }
-  } finally { guard.releaseLock(); }
+    SpreadsheetApp.flush();
+  });
 }
 
-function fetchEspnLine_(week, team1, team2) {
-  var base = "/apis/site/v2/sports/football/nfl/scoreboard?week=" + week +
-    "&seasontype=2&dates=" + SEASON;
+function fetchEntryScoreboard_(week) {
+  var base = "/apis/site/v2/sports/football/nfl/scoreboard?_=" + Date.now();
+  if (week !== null) base += "&week=" + week + "&seasontype=2&dates=" + SEASON;
   var hosts = ["https://site.web.api.espn.com", "https://site.api.espn.com"];
   for (var i = 0; i < hosts.length; i++) {
     try {
       var res = UrlFetchApp.fetch(hosts[i] + base, {muteHttpExceptions:true});
       if (res.getResponseCode() !== 200) continue;
       var data = JSON.parse(res.getContentText());
-      for (var j = 0; j < (data.events || []).length; j++) {
-        var ev = data.events[j], comp = ev.competitions && ev.competitions[0];
-        if (!comp) continue;
+      var number = data.week && Number(data.week.number);
+      if (!data.season || Number(data.season.year) !== SEASON || Number(data.season.type) !== 2 ||
+          !Number.isInteger(number) || number < 1 || number > 18 ||
+          (week !== null && number !== week) || !Array.isArray(data.events) || !data.events.length) continue;
+      var games = {};
+      data.events.forEach(function (event) {
+        var comp = event.competitions && event.competitions[0];
+        if (!comp) return;
         var teams = comp.competitors || [];
         var home = teams.filter(function (c) { return c.homeAway === "home"; })[0];
         var away = teams.filter(function (c) { return c.homeAway === "away"; })[0];
-        if (!home || !away) continue;
-        var homeAbbr = String(home.team.abbreviation).toUpperCase();
-        var awayAbbr = String(away.team.abbreviation).toUpperCase();
-        if ([homeAbbr, awayAbbr].sort().join("|") !== [team1, team2].sort().join("|")) continue;
+        if (!home || !away || !home.team || !away.team ||
+            !home.team.abbreviation || !away.team.abbreviation) return;
+        var homeTeam = String(home.team.abbreviation).toUpperCase();
+        var awayTeam = String(away.team.abbreviation).toUpperCase();
+        var stamp = Date.parse(comp.date || event.date);
+        var status = (comp.status || event.status || {}).type;
         var odds = (comp.odds || [])[0];
-        if (!odds || !odds.pointSpread) return null;
-        var homeRaw = odds.pointSpread.home && odds.pointSpread.home.close && odds.pointSpread.home.close.line;
-        var awayRaw = odds.pointSpread.away && odds.pointSpread.away.close && odds.pointSpread.away.close.line;
-        if (homeRaw == null || awayRaw == null || homeRaw === "" || awayRaw === "") return null;
-        var homeLine = Number(homeRaw), awayLine = Number(awayRaw);
-        if (!isFinite(homeLine) || !isFinite(awayLine) || Math.abs(homeLine + awayLine) > 0.001 ||
-            Math.abs(homeLine) > 50) return null;
-        return {line:team2 === homeAbbr ? homeLine : awayLine,
-          provider:odds.provider && odds.provider.name || "unknown provider",eventId:String(ev.id)};
-      }
+        var spread = (odds && odds.pointSpread) || {};
+        var homeLine = signedLine_(spread.home && spread.home.close && spread.home.close.line);
+        var awayLine = signedLine_(spread.away && spread.away.close && spread.away.close.line);
+        var linesAgree = homeLine !== null && awayLine !== null && Math.abs(homeLine + awayLine) < 0.001;
+        var key = matchupKey_(homeTeam, awayTeam);
+        games[key] = {home: homeTeam, away: awayTeam,
+          homeLine: linesAgree ? homeLine : null, awayLine: linesAgree ? awayLine : null,
+          kickoff: Number.isFinite(stamp) ? new Date(stamp).toISOString() : null,
+          started: !status || status.state !== "pre" || status.completed === true,
+          provider: odds && odds.provider && odds.provider.name || "unknown provider",
+          eventId: event.id == null ? null : String(event.id)};
+      });
+      if (Object.keys(games).length) return {week: number, games: games};
     } catch (err) { /* try the other ESPN host */ }
   }
-  return null;
+  throw new Error("Could not load the NFL schedule from ESPN. Try again or choose a specific week.");
+}
+
+function espnMarketLine_(market, team2) {
+  return team2 === market.home ? market.homeLine : market.awayLine;
+}
+
+function fetchEspnLine_(week, team1, team2) {
+  try {
+    var market = fetchEntryScoreboard_(week).games[matchupKey_(team1, team2)];
+    if (!market) return null;
+    var line = espnMarketLine_(market, team2);
+    return line === null ? null : {line: line, provider: market.provider, eventId: market.eventId};
+  } catch (err) {
+    return null;
+  }
 }
 
 // Read-only diagnostic for the owner before enabling automatic locks.
-function testWeek10EspnAccess() {
+function testWeek10EspnAccess_() {
   var checks = [["WSH", "NYG"], ["KC", "ATL"], ["LAC", "BAL"]];
   checks.forEach(function (teams) {
     var result = fetchEspnLine_(10, teams[0], teams[1]);
@@ -410,20 +709,20 @@ function testWeek10EspnAccess() {
 
 function menuBuildWeek_() {
   var wk = promptWeek_("Build schedule — which week? (1-18)");
-  if (wk) buildWeekSchedule(wk);
+  if (wk) buildWeekSchedule_(wk);
 }
 function menuAddDropdowns_() {
   var wk = promptWeek_("Add dropdowns — which week? (1-18)");
-  if (wk) addDropdowns(wk);
+  if (wk) addDropdowns_(wk);
 }
 function menuLockSpreads_() {
   var wk = promptWeek_("Lock official spreads — which week? (1-18)");
-  if (wk) lockWeekSpreads(wk);
+  if (wk) withPickScriptLock_(function () { lockWeekSpreads_(wk); });
 }
-function lockWeekSpreads(week) {
+function lockWeekSpreads_(week) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Week " + Number(week));
   if (!sheet) throw new Error("Week tab missing");
-  var key = "SPREAD_LINES_" + SEASON + "_" + Number(week);
+  var key = spreadReceiptKey_(Number(week));
   var properties = PropertiesService.getDocumentProperties();
   var receipt = JSON.parse(properties.getProperty(key) || '{"games":{}}');
   var values = sheet.getDataRange().getValues();

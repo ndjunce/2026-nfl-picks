@@ -78,6 +78,7 @@
           background:#0d131c;border:1px solid var(--line);transition:.12s}
   .tabs a:hover{color:var(--ink);border-color:var(--blu)}
   .tabs a.active{color:#04121f;background:var(--blu);border-color:var(--blu)}
+  .tabs a[hidden]{display:none}
   .tabs a.soon{opacity:.5;pointer-events:none}
   /* week selector tabs (Week 1..18) */
   .weekbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
@@ -303,6 +304,7 @@
   <nav class="tabs">
     <a href="index.html" class="active">🏈 Picks</a>
     <a href="stats.html">📊 Stats</a>
+    <a id="pick-entry-link" hidden>Enter my picks</a>
   </nav>
 </header>
 
@@ -416,6 +418,13 @@ async function loadAllWeekTabs(){
     if(/^\s*</.test(text)) throw new Error("web app did not return JSON (check deployment access = Anyone)");
     const data = JSON.parse(text);
     const weeksObj = (data && data.weeks) || {};
+    if(data.playerPickEntry === true){
+      const link = document.getElementById("pick-entry-link");
+      const entryUrl = new URL(SHEET.jsonUrl);
+      entryUrl.searchParams.set("entry", "1");
+      link.href = entryUrl.href;
+      link.hidden = false;
+    }
     if(Array.isArray(data.players) && data.players.length) SHEET.players = data.players.slice();
     if(data.season) SHEET.season = data.season;
     const out = {};
