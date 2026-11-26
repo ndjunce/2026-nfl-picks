@@ -28,13 +28,12 @@ Live: https://ndjunce.github.io/2026-nfl-picks/  ·  Admin: add `/admin.html` to
 The dashboard and backup admin grid are static GitHub Pages files.
 - **Friends** open `index.html`: they see picks + live scores. If they open `admin.html` and click,
   it only changes THEIR OWN browser — they **cannot publish** (no repo access).
-- **Only you** change what everyone sees, by committing & pushing `picks.js` (needs your GitHub login).
+- Publishing the backup `picks.js` file requires GitHub write access.
 - **Edit history (receipt):** every push is a timestamped git commit, AND each generated `picks.js`
   stamps an `_editLog` line — a double record of what was entered and when.
 
-The admin grid does NOT auto-save to the cloud on purpose: an instant-save would require a secret
-write-token in the public page, which a friend could read. The git-push flow is what guarantees only
-you can publish.
+The backup admin grid saves edits in the organizer's browser. To publish its picks, export
+`picks.js` and push it using your GitHub account.
 
 ## Player entry for spread weeks
 
