@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base target="_top">
+  <title>Enter Weekly Picks · Phipps Tavern</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f16;
+      --card: #161d2a;
+      --line: #3a485d;
+      --ink: #f2f6fb;
+      --muted: #a9b6c8;
+      --blue: #72bcff;
+      --error: #ffacac;
+      --success: #70e6a7;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.5 system-ui, sans-serif; }
+    main { width: min(100%, 45rem); margin: auto; padding: 1.25rem 1rem 2rem; }
+    a { color: var(--blue); }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(1.65rem, 5vw, 2.25rem); margin-top: .75rem; }
+    h2 { font-size: 1.25rem; }
+    .muted { color: var(--muted); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: .8rem; padding: 1rem; }
+    form, #games, .game, #pick-card { display: grid; gap: .8rem; }
+    .credentials { display: grid; gap: .75rem; grid-template-columns: 1fr 1.4fr 1fr; }
+    label { display: block; font-weight: 650; }
+    input, select, button { font: inherit; border: 1px solid var(--line); border-radius: .5rem; min-height: 2.75rem; }
+    input, select { width: 100%; margin-top: .25rem; padding: .4rem .55rem; background: var(--bg); color: var(--ink); }
+    button { padding: .45rem .9rem; background: var(--blue); color: #0b1724; font-weight: 750; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: default; }
+    :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+    #open-card { margin-top: 1.25rem; }
+    .status { min-height: 1.5rem; }
+    #status { margin: .65rem 0; }
+    .status[data-tone="error"] { color: var(--error); }
+    .status[data-tone="success"] { color: var(--success); }
+    #credentials-info { font-size: .875rem; }
+    fieldset { margin: 0; padding: 0; min-width: 0; border: 0; }
+    legend { padding: 0; font-weight: 750; }
+    .game-note { font-size: .9rem; }
+    .choices { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; }
+    .choice { position: relative; }
+    .choice input { position: absolute; opacity: 0; width: 1px; min-height: 0; }
+    .choice span { display: flex; justify-content: space-between; align-items: center; gap: .4rem;
+      padding: .65rem .8rem; min-height: 2.75rem; border: 1px solid var(--line);
+      border-radius: .5rem; color: var(--ink); background: var(--bg); cursor: pointer; font-variant-numeric: tabular-nums; }
+    .choice input:checked + span { border-color: var(--blue); background: #183b58; }
+    .choice input:focus-visible + span { outline: 3px solid var(--blue); outline-offset: 2px; }
+    .choice input:disabled + span { cursor: default; }
+    .choice input:disabled:not(:checked) + span { color: var(--muted); }
+    #tiebreaker { max-width: 12rem; }
+    .actions { display: flex; gap: .7rem; flex-wrap: wrap; }
+    #refresh-card { background: transparent; color: var(--blue); }
+    @media (max-width: 32rem) {
+      .credentials { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="https://ndjunce.github.io/2026-nfl-picks/">Back to the picks dashboard</a>
+    <h1>Enter weekly picks</h1>
+    <p class="muted">Choose the team you think will cover in each NFL game. You can save and change picks until kickoff.</p>
+
+    <form id="open-card" class="card">
+      <div class="credentials">
+        <label>Player
+          <select id="player" required>
+            <option value="">Choose your name</option>
+            <option>Nick</option><option>Clyde</option><option>Chet</option>
+            <option>Henry</option><option>Riley</option><option>Bobby</option>
+          </select>
+        </label>
+        <label>Access code
+          <input id="code" type="password" autocomplete="off" required aria-describedby="credentials-info">
+        </label>
+        <label>Week
+          <select id="week"><option value="">Current week</option></select>
+        </label>
+      </div>
+      <p class="muted" id="credentials-info">Use the access code from your pool organizer.</p>
+      <div><button id="open-button">Open pick card</button></div>
+    </form>
+
+    <p id="status" class="status" role="status"></p>
+    <form id="pick-card" hidden aria-labelledby="card-title">
+      <header>
+        <h2 id="card-title" tabindex="-1"></h2>
+        <p class="muted" id="pick-count"></p>
+      </header>
+      <div id="games"></div>
+      <div class="card">
+        <label for="tiebreaker">Tiebreaker total</label>
+        <p class="muted" id="tiebreaker-note"></p>
+        <input id="tiebreaker" type="number" min="0" step="1" inputmode="numeric" aria-describedby="tiebreaker-note">
+      </div>
+      <div class="actions">
+        <button id="save-button">Save picks</button>
+        <button type="button" id="refresh-card">Refresh lines</button>
+      </div>
+      <p id="save-status" class="status" role="status"></p>
+    </form>
+  </main>
+  <script>
+    const openForm = document.querySelector('#open-card');
+    const pickForm = document.querySelector('#pick-card');
+    const playerInput = document.querySelector('#player');
+    const codeInput = document.querySelector('#code');
+    const weekInput = document.querySelector('#week');
+    const openButton = document.querySelector('#open-button');
+    const saveButton = document.querySelector('#save-button');
+    const refreshButton = document.querySelector('#refresh-card');
+    const cardTitle = document.querySelector('#card-title');
+    const pickCount = document.querySelector('#pick-count');
+    const games = document.querySelector('#games');
+    const tiebreakerInput = document.querySelector('#tiebreaker');
+    const tiebreakerNote = document.querySelector('#tiebreaker-note');
+    const status = document.querySelector('#status');
+    const saveStatus = document.querySelector('#save-status');
+    const kickoffFormat = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+    });
+    for (let week = 1; week <= 18; week++) weekInput.add(new Option('Week ' + week, week));
+
+    let session = null;
+    let card = null;
+    let busy = false;
+
+    function message(text, tone = '', target = status) {
+      target.textContent = text;
+      target.dataset.tone = tone;
+    }
+
+    function rpc(method, ...args) {
+      return new Promise((resolve, reject) => {
+        const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+        runner[method](...args);
+      });
+    }
+
+    function signed(line) {
+      if (line === null) return '—';
+      if (line === 0) return 'PK';
+      return line > 0 ? '+' + line : String(line);
+    }
+
+    function matchup(game) {
+      return game.team1 + ' vs. ' + game.team2;
+    }
+
+    function canPick(game) {
+      return !game.closed && Number.isFinite(game.team2Spread);
+    }
+
+    function renderCard(drafts = [], draftTotal = null) {
+      const pending = new Map(drafts.map(game => [matchup(game), game]));
+      cardTitle.textContent = session.player + ' · Week ' + card.week;
+      pickCount.textContent = card.games.filter(game => game.pick).length + ' of ' + card.games.length + ' picks saved';
+      games.replaceChildren();
+      card.games.forEach((game, index) => {
+        const section = document.createElement('div');
+        section.className = 'game card';
+        const group = document.createElement('fieldset');
+        group.disabled = !canPick(game);
+        const title = document.createElement('legend');
+        title.textContent = matchup(game);
+        group.append(title);
+
+        const note = document.createElement('div');
+        note.className = 'muted game-note';
+        note.id = 'game-note-' + index;
+        group.setAttribute('aria-describedby', note.id);
+        const timing = game.kickoff ? kickoffFormat.format(new Date(game.kickoff)) : '';
+        note.textContent = [
+          timing,
+          game.closed ? 'Picks closed' : Number.isFinite(game.team2Spread) ? '' : 'Waiting for a spread'
+        ].filter(Boolean).join(' · ');
+        group.append(note);
+
+        const choices = document.createElement('div');
+        choices.className = 'choices';
+        const draft = pending.get(matchup(game));
+        const pick = canPick(game) && draft && draft.team2Spread === game.team2Spread ? draft.pick : game.pick;
+        for (const [team, line] of [
+          [game.team1, game.team2Spread === null ? null : -game.team2Spread],
+          [game.team2, game.team2Spread]
+        ]) {
+          const label = document.createElement('label');
+          label.className = 'choice';
+          const input = document.createElement('input');
+          input.type = 'radio';
+          input.name = 'game-' + index;
+          input.value = team;
+          input.checked = pick === team;
+          const text = document.createElement('span');
+          const abbr = document.createElement('b');
+          abbr.textContent = team;
+          const spread = document.createElement('strong');
+          spread.textContent = signed(line);
+          text.append(abbr, spread);
+          label.append(input, text);
+          choices.append(label);
+        }
+        group.append(choices);
+        section.append(group);
+        games.append(section);
+      });
+      const last = card.games.at(-1);
+      tiebreakerNote.textContent = 'Predict the combined points in ' + matchup(last)
+        + (card.tiebreakerClosed ? '. Tiebreaker closed.' : '.');
+      tiebreakerInput.value = (!card.tiebreakerClosed && draftTotal !== null ? draftTotal : card.tiebreaker) ?? '';
+      tiebreakerInput.disabled = card.tiebreakerClosed;
+      pickForm.hidden = false;
+      updateButtons();
+    }
+
+    function pendingChanges() {
+      const changes = [];
+      card.games.forEach((game, index) => {
+        const pick = pickForm.querySelector('input[name="game-' + index + '"]:checked')?.value;
+        if (canPick(game) && pick && pick !== game.pick) {
+          changes.push({ team1: game.team1, team2: game.team2, team2Spread: game.team2Spread, pick });
+        }
+      });
+      const total = tiebreakerInput.valueAsNumber;
+      const tiebreaker = !card.tiebreakerClosed && Number.isInteger(total) && total >= 0 && total !== card.tiebreaker
+        ? total : null;
+      return { changes, tiebreaker };
+    }
+
+    function updateButtons() {
+      for (const input of [playerInput, codeInput, weekInput, openButton, refreshButton]) input.disabled = busy;
+      tiebreakerInput.disabled = busy || !card || card.tiebreakerClosed;
+      if (card) {
+        const { changes, tiebreaker } = pendingChanges();
+        saveButton.disabled = busy || (!changes.length && tiebreaker === null);
+        games.querySelectorAll('fieldset').forEach((group, index) => {
+          group.disabled = busy || !canPick(card.games[index]);
+        });
+      }
+    }
+
+    async function loadCard(identity, refresh = false) {
+      const draft = refresh ? pendingChanges() : { changes: [], tiebreaker: null };
+      const target = refresh ? saveStatus : status;
+      message('', '', refresh ? status : saveStatus);
+      if (!refresh) {
+        card = null;
+        session = null;
+        pickForm.hidden = true;
+      }
+      busy = true;
+      updateButtons();
+      message(refresh ? 'Checking the latest lines…' : 'Opening your pick card…', '', target);
+      try {
+        const next = await rpc('getPlayerPickCard', identity.player, identity.code, identity.week);
+        card = next;
+        session = { ...identity, week: next.week };
+        renderCard(draft.changes, draft.tiebreaker);
+        const dropped = (draft.tiebreaker !== null && card.tiebreakerClosed) ||
+          draft.changes.some(changed => !card.games.some(game =>
+            matchup(game) === matchup(changed) && canPick(game) && game.team2Spread === changed.team2Spread));
+        message(dropped ? 'Some lines changed or games closed. Review those matchups before saving.'
+          : refresh ? 'Lines refreshed.' : '', dropped ? 'error' : '', target);
+        if (!refresh) cardTitle.focus();
+      } catch (error) {
+        message(error?.message || 'Could not open your pick card. Try again.', 'error', target);
+      } finally {
+        busy = false;
+        updateButtons();
+      }
+    }
+
+    openForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (busy) return;
+      const identity = { player: playerInput.value, code: codeInput.value.trim(), week: weekInput.value };
+      loadCard(identity);
+    });
+    refreshButton.addEventListener('click', () => {
+      if (!busy && session) loadCard(session, true);
+    });
+    pickForm.addEventListener('input', updateButtons);
+    pickForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy || !card) return;
+      const { changes, tiebreaker } = pendingChanges();
+      if (!changes.length && tiebreaker === null) return;
+      busy = true;
+      updateButtons();
+      message('Saving your picks…', '', saveStatus);
+      try {
+        card = await rpc('savePlayerPickCard', session.player, session.code, card.week, changes, tiebreaker);
+        renderCard();
+        message('Week ' + card.week + ' picks saved.', 'success', saveStatus);
+      } catch (error) {
+        message(error?.message || 'Could not save your picks. Try again.', 'error', saveStatus);
+      } finally {
+        busy = false;
+        updateButtons();
+      }
+    });
+  </script>
+</body>
+</html>
